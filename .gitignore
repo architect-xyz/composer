@@ -1,0 +1,9 @@
+.terraform/
+*.tfstate*
+.idea/
+mnt/
+docker*/**/.env
+var/
+**/target/
+**/*.rs.bk
+Cargo.lock
