@@ -177,7 +177,11 @@ async fn run_on_schedule(
                 }
                 Ok(out) => {
                     if !out.status.success() {
-                        error!("{action} {service} failed with status {}", out.status);
+                        error!(
+                            "{action} {service} failed with status {}, stderr follows\r\n{}",
+                            out.status,
+                            std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>")
+                        );
                     } else {
                         info!("{} {service} succeeded", action.as_gerund());
                     }
