@@ -1,8 +1,17 @@
 services:
   say_hello_world:
+    profiles: [ "jobs" ]
     image: "alpine:3.12"
     command: echo "Hello, World!"
     stdin_open: true
     tty: true
     labels:
       - "co.architect.composer.run=*/30 * * * * *"
+
+  scheduler:
+    image: "afintech/composer:latest"
+    environment:
+      - RUST_LOG=composer=debug
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./compose.yml:/compose.yml:ro

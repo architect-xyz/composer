@@ -162,6 +162,7 @@ async fn run_on_schedule(
             if (now - up).abs() > chrono::Duration::seconds(1) {
                 error!("time skew for scheduled {action}: expected {up}, is {now}");
             }
+            info!("{} {service}...", action.as_gerund());
             let mut cmd = compose_command(
                 &context.compose_file,
                 context.env_file.as_ref(),
