@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use clap::Parser;
 use cron::Schedule;
-use log::{debug, info};
+use log::{debug, error, info, warn};
 use std::path::{Path, PathBuf};
 use tokio::task::JoinSet;
 
@@ -37,6 +37,24 @@ enum ComposeAction {
     Restart,
 }
 
+impl ComposeAction {
+    fn as_gerund(&self) -> &str {
+        match self {
+            ComposeAction::Run => "running",
+            ComposeAction::Restart => "restarting",
+        }
+    }
+}
+
+impl std::fmt::Display for ComposeAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComposeAction::Run => write!(f, "run"),
+            ComposeAction::Restart => write!(f, "restart"),
+        }
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -60,20 +78,16 @@ async fn main() -> Result<()> {
                     let schedule: Schedule = value.parse().with_context(|| {
                         format!("while parsing cron expression: {value}")
                     })?;
-                    info!("service {name} has a {action:?} schedule: {schedule}");
-                    match action {
-                        ComposeAction::Run => {
-                            scheduler.spawn(run_on_schedule(
-                                ComposeContext {
-                                    compose_file: args.compose_file.clone(),
-                                    env_file: args.env_file.clone(),
-                                },
-                                schedule,
-                                name.clone(),
-                            ));
-                        }
-                        ComposeAction::Restart => todo!(),
-                    };
+                    info!("service {name} has a {action} schedule: {schedule}");
+                    scheduler.spawn(run_on_schedule(
+                        ComposeContext {
+                            compose_file: args.compose_file.clone(),
+                            env_file: args.env_file.clone(),
+                        },
+                        action,
+                        schedule,
+                        name.clone(),
+                    ));
                     // for up in schedule.upcoming(Utc).take(3) {
                     //     println!("  -> {}", up);
                     // }
@@ -130,22 +144,48 @@ async fn load_compose_config<P: AsRef<Path>, S: AsRef<str>>(
     Ok(compose)
 }
 
-async fn run_on_schedule(context: ComposeContext, schedule: Schedule, service: String) {
+async fn run_on_schedule(
+    context: ComposeContext,
+    action: ComposeAction,
+    schedule: Schedule,
+    service: String,
+) {
     loop {
         if let Some(up) = schedule.upcoming(Utc).next() {
-            let duration_from_now = up - Utc::now();
-            info!("next run for {service} in {duration_from_now} at {up}");
-            tokio::time::sleep(duration_from_now.to_std().unwrap()).await;
+            let duration_from_now = (up - Utc::now()).to_std().unwrap();
+            info!(
+                "next {action} for {service} in {} at {up}",
+                humantime::format_duration(duration_from_now)
+            );
+            tokio::time::sleep(duration_from_now).await;
+            let now = Utc::now();
+            if (now - up).abs() > chrono::Duration::seconds(1) {
+                error!("time skew for scheduled {action}: expected {up}, is {now}");
+            }
+            let mut cmd = compose_command(
+                &context.compose_file,
+                context.env_file.as_ref(),
+                None::<&str>,
+            );
+            match action {
+                ComposeAction::Run => cmd.arg("run"),
+                ComposeAction::Restart => cmd.arg("restart"),
+            };
+            match cmd.arg(&service).output().await {
+                Err(e) => {
+                    error!("error {} {service}: {e}", action.as_gerund());
+                }
+                Ok(out) => {
+                    if !out.status.success() {
+                        error!("{action} {service} failed with status {}", out.status);
+                    } else {
+                        info!("{} {service} succeeded", action.as_gerund());
+                    }
+                }
+            }
         } else {
+            warn!("no more upcoming {action}s for {service}, task exiting");
             break;
         }
     }
-    // for up in schedule.upcoming(Utc).take(3) {
-    //     let mut cmd = compose_command(
-    //         &context.compose_file,
-    //         context.env_file.as_ref(),
-    //         None::<&str>,
-    //     );
-    //     println!("  -> {}", up);
-    // }
 }
