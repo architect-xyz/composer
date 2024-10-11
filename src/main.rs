@@ -139,6 +139,8 @@ async fn load_compose_config<P: AsRef<Path>, S: AsRef<str>>(
     let mut cmd = compose_command(compose_file, env_file, profile);
     let out =
         cmd.arg("config").output().await.with_context(|| "docker compose config")?;
+    let stdout_s = std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
+    debug!("compose config:\r\n{stdout_s}");
     let compose: compose_types::Compose =
         serde_yaml::from_slice(&out.stdout).context("parsing compose config")?;
     Ok(compose)
