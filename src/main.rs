@@ -169,7 +169,7 @@ async fn run_on_schedule(
                 None::<&str>,
             );
             match action {
-                ComposeAction::Run => cmd.arg("run"),
+                ComposeAction::Run => cmd.arg("run").arg("--rm"),
                 ComposeAction::Restart => cmd.arg("restart"),
             };
             match cmd.arg(&service).output().await {
@@ -177,12 +177,18 @@ async fn run_on_schedule(
                     error!("error {} {service}: {e}", action.as_gerund());
                 }
                 Ok(out) => {
+                    let stdout_s =
+                        std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
+                    let stderr_s =
+                        std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>");
+                    for line in stdout_s.lines() {
+                        debug!("{service} stdout: {line}");
+                    }
+                    for line in stderr_s.lines() {
+                        debug!("{service} stderr: {line}");
+                    }
                     if !out.status.success() {
-                        error!(
-                            "{action} {service} failed with status {}, stderr follows\r\n{}",
-                            out.status,
-                            std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>")
-                        );
+                        error!("{action} {service} failed with status {}", out.status,);
                     } else {
                         info!("{} {service} succeeded", action.as_gerund());
                     }

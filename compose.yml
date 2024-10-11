@@ -1,3 +1,4 @@
+name: composer_example
 services:
   say_hello_world:
     profiles: [ "jobs" ]
@@ -6,7 +7,21 @@ services:
     stdin_open: true
     tty: true
     labels:
+      # run this service every thirty seconds
       - "co.architect.composer.run=*/30 * * * * *"
+
+  repeat_myself:
+    image: "alpine:3.12"
+    command: sh /test.sh 
+    stdin_open: true
+    tty: true
+    environment:
+      - MY_ENV_VAR=${MY_ENV_VAR}
+    volumes:
+      - ./test.sh:/test.sh:ro
+    labels:
+      # restart this service every minute
+      - "co.architect.composer.restart=0 * * * * *"
 
   scheduler:
     image: "afintech/composer:latest"
@@ -14,4 +29,7 @@ services:
       - RUST_LOG=composer=debug
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # mount in the docker compose configuration
       - ./compose.yml:/compose.yml:ro
+      # mount in the env file used by docker compose (optional)
+      - ./.env:/.env:ro
