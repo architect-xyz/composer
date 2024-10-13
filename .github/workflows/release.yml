@@ -18,7 +18,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: "Build and push Docker image (slurp)"
+      - name: "Build and push Docker image"
         run: |
           depot build --push --project 2m5pzqgvpk --build-platform "linux/arm64" \
             -t afintech/composer:latest .
