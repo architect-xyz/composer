@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use clap::Parser;
 use cron::Schedule;
 use log::{debug, error, info, warn};
-use std::path::{Path, PathBuf};
+use std::{env::VarError, path::PathBuf};
 use tokio::task::JoinSet;
 
 mod compose_types;
@@ -20,12 +20,20 @@ struct Args {
     compose_file: PathBuf,
     #[clap(long)]
     env_file: Option<PathBuf>,
+    // Specify the --project-directory option for docker compose commands;
+    //
+    // This should used if there are relative directories in the compose
+    // file and the file mount to composer doesn't match the outside
+    // directory structure.
+    #[clap(long)]
+    project_directory: Option<String>,
 }
 
 #[derive(Clone)]
 struct ComposeContext {
     compose_file: PathBuf,
     env_file: Option<PathBuf>,
+    project_directory: Option<String>,
 }
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
@@ -59,9 +67,20 @@ impl std::fmt::Display for ComposeAction {
 async fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
-    let compose =
-        load_compose_config(&args.compose_file, args.env_file.as_ref(), Some("*"))
-            .await?;
+    let project_directory = match args.project_directory {
+        Some(pwd) => Some(pwd.to_owned()),
+        None => match std::env::var("COMPOSE_PROJECT_DIRECTORY") {
+            Ok(pwd) => Some(pwd.to_owned()),
+            Err(VarError::NotPresent) => None,
+            Err(_) => bail!("COMPOSE_PROJECT_DIRECTORY was specified but not utf-8"),
+        },
+    };
+    let context = ComposeContext {
+        compose_file: args.compose_file.to_owned(),
+        env_file: args.env_file.map(|f| f.to_owned()),
+        project_directory,
+    };
+    let compose = load_compose_config(&context, Some("*")).await?;
     let mut scheduler = JoinSet::new();
     for (name, service) in &compose.services {
         debug!("parsing service: {name}");
@@ -80,10 +99,7 @@ async fn main() -> Result<()> {
                     })?;
                     info!("service {name} has a {action} schedule: {schedule}");
                     scheduler.spawn(run_on_schedule(
-                        ComposeContext {
-                            compose_file: args.compose_file.clone(),
-                            env_file: args.env_file.clone(),
-                        },
+                        context.clone(),
                         action,
                         schedule,
                         name.clone(),
@@ -99,15 +115,17 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn compose_command<P: AsRef<Path>, S: AsRef<str>>(
-    compose_file: P,
-    env_file: Option<P>,
+fn compose_command<S: AsRef<str>>(
+    context: &ComposeContext,
     profile: Option<S>,
 ) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("docker");
-    cmd.arg("compose").arg("-f").arg(compose_file.as_ref().as_os_str());
-    if let Some(env_file) = env_file {
-        cmd.arg("--env-file").arg(env_file.as_ref().as_os_str());
+    cmd.arg("compose").arg("-f").arg(context.compose_file.as_os_str());
+    if let Some(env_file) = &context.env_file {
+        cmd.arg("--env-file").arg(env_file.as_os_str());
+    }
+    if let Some(project_directory) = &context.project_directory {
+        cmd.arg("--project-directory").arg(project_directory.as_str());
     }
     if let Some(profile) = profile {
         cmd.arg("--profile").arg(profile.as_ref());
@@ -115,11 +133,8 @@ fn compose_command<P: AsRef<Path>, S: AsRef<str>>(
     cmd
 }
 
-async fn _load_compose_profiles<P: AsRef<Path>>(
-    compose_file: P,
-    env_file: Option<P>,
-) -> Result<Vec<String>> {
-    let mut cmd = compose_command(compose_file, env_file, None::<&str>);
+async fn _load_compose_profiles(context: &ComposeContext) -> Result<Vec<String>> {
+    let mut cmd = compose_command(context, None::<&str>);
     let out = cmd
         .arg("config")
         .arg("--profiles")
@@ -131,12 +146,11 @@ async fn _load_compose_profiles<P: AsRef<Path>>(
     Ok(profiles)
 }
 
-async fn load_compose_config<P: AsRef<Path>, S: AsRef<str>>(
-    compose_file: P,
-    env_file: Option<P>,
+async fn load_compose_config<S: AsRef<str>>(
+    context: &ComposeContext,
     profile: Option<S>,
 ) -> Result<compose_types::Compose> {
-    let mut cmd = compose_command(compose_file, env_file, profile);
+    let mut cmd = compose_command(context, profile);
     let out =
         cmd.arg("config").output().await.with_context(|| "docker compose config")?;
     let stdout_s = std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
@@ -165,11 +179,7 @@ async fn run_on_schedule(
                 error!("time skew for scheduled {action}: expected {up}, is {now}");
             }
             info!("{} {service}...", action.as_gerund());
-            let mut cmd = compose_command(
-                &context.compose_file,
-                context.env_file.as_ref(),
-                None::<&str>,
-            );
+            let mut cmd = compose_command(&context, None::<&str>);
             match action {
                 ComposeAction::Run => cmd.arg("run").arg("--rm"),
                 ComposeAction::Restart => cmd.arg("restart"),

@@ -3,9 +3,11 @@ services:
   say_hello_world:
     profiles: [ "jobs" ]
     image: "alpine:3.12"
-    command: echo "Hello, World!"
+    command: sh /say_hello.sh 
     stdin_open: true
     tty: true
+    volumes:
+      - ./say_hello.sh:/say_hello.sh
     labels:
       # run this service every thirty seconds
       - "co.architect.composer.run=*/30 * * * * *"
@@ -26,7 +28,9 @@ services:
   scheduler:
     image: "afintech/composer:latest"
     environment:
+      # recommended to set log level to debug
       - RUST_LOG=composer=debug
+      - COMPOSE_PROJECT_DIRECTORY=${PWD}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # mount in the docker compose configuration
