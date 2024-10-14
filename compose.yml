@@ -3,7 +3,7 @@ services:
   say_hello_world:
     profiles: [ "jobs" ]
     image: "alpine:3.12"
-    command: sh /say_hello.sh 
+    command: sh /say_hello.sh
     stdin_open: true
     tty: true
     volumes:
@@ -14,7 +14,7 @@ services:
 
   repeat_myself:
     image: "alpine:3.12"
-    command: sh /test.sh 
+    command: sh /test.sh
     stdin_open: true
     tty: true
     environment:
@@ -31,9 +31,12 @@ services:
       # recommended to set log level to debug
       - RUST_LOG=composer=debug
       - COMPOSE_PROJECT_DIRECTORY=${PWD}
+      - COMPOSE_RUN_LOGS=/var/log/composer
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # mount in the docker compose configuration
       - ./compose.yml:/compose.yml:ro
       # mount in the env file used by docker compose (optional)
       - ./.env:/.env:ro
+      # mount in logs directory for run logs
+      - ./var/logs:/var/log/composer:rw
