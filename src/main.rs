@@ -22,14 +22,9 @@ struct Args {
     #[clap(short = 'f', default_value = "compose.yml")]
     compose_file: PathBuf,
     /// Specify the environment file to use for docker compose commands.
-    ///
-    /// NOTE: if --project-directory is specified, /.env won't work as
-    /// an env file location.  Evidently, docker compose thinks its a
-    /// relative path and looks in ${COMPOSE_PROJECT_DIRECTORY}/.env
-    /// instead.
     #[clap(long)]
     env_file: Option<PathBuf>,
-    /// Specify the --project-directory option for docker compose commands;
+    /// Specify the --project-directory option for docker compose commands.
     #[clap(long)]
     project_directory: Option<String>,
     /// Put stdout/stderr from job runs to this directory instead of
