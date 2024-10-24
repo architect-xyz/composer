@@ -27,4 +27,6 @@ services:
       - ./compose.yml:/compose.yml:ro
       # mount in the env file used by docker compose (optional)
       - ./.env:/.env:ro
+      # you may also need to mount the env file into the compose --project-directory
+      - ./.env:${PWD}/.env:ro
 ```
