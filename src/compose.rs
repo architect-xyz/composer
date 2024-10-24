@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use log::{debug, error};
 use std::path::PathBuf;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ComposeContext {
     pub compose_file: PathBuf,
     pub env_file: Option<PathBuf>,
@@ -70,6 +70,7 @@ pub async fn load_compose_config<S: AsRef<str>>(
     profile: Option<S>,
 ) -> Result<compose_types::Compose> {
     let mut cmd = compose_command(context, profile);
+    debug!("compose command context: {context:?}");
     let out =
         cmd.arg("config").output().await.with_context(|| "docker compose config")?;
     let stdout_s = std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
