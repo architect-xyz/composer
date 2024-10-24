@@ -1,6 +1,6 @@
 use crate::compose_types;
 use anyhow::{Context, Result};
-use log::debug;
+use log::{debug, error};
 use std::path::PathBuf;
 
 #[derive(Clone)]
@@ -73,7 +73,11 @@ pub async fn load_compose_config<S: AsRef<str>>(
     let out =
         cmd.arg("config").output().await.with_context(|| "docker compose config")?;
     let stdout_s = std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
+    let stderr_s = std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>");
     debug!("compose config:\r\n{stdout_s}");
+    for line in stderr_s.lines() {
+        error!("compose config error: {line}");
+    }
     let compose: compose_types::Compose =
         serde_yaml::from_slice(&out.stdout).context("parsing compose config")?;
     Ok(compose)
