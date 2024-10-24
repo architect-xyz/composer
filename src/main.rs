@@ -16,6 +16,7 @@ mod compose_types;
 /// labels to your services with a cron expression (Quartz-compatible, e.g.
 /// seconds field is first) to schedule runs or restarts.
 #[derive(Parser)]
+#[command(version, about, long_about = None)]
 struct Args {
     // CR alee: try [docker-]compose.{yml,yaml}
     #[clap(short = 'f', default_value = "compose.yml")]
