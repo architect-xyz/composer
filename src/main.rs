@@ -1,9 +1,10 @@
 use crate::compose::*;
-use anyhow::{bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use cron::Schedule;
 use log::{debug, error, info, warn};
+use serde_json::json;
 use std::{env::VarError, fs::File, path::PathBuf};
 use tokio::task::JoinSet;
 
@@ -31,6 +32,17 @@ struct Args {
     /// logging them to console.
     #[clap(long)]
     run_logs: Option<PathBuf>,
+    /// Optional hostname to identify the host.
+    /// You may also set this via env var HOST.
+    #[clap(long)]
+    hostname: Option<String>,
+    /// Slack webhook URL for notifications.
+    /// You may also set this via env var SLACK_WEBHOOK_URL.
+    ///
+    /// If set, jobs can opt in to slack notifications with the label
+    /// co.architect.composer.notify.slack=true
+    #[clap(long)]
+    slack_webhook_url: Option<String>,
 }
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
@@ -40,6 +52,14 @@ const RESTART_KEYS: [&str; 1] = ["co.architect.composer.restart"];
 async fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
+    let hostname = match args.hostname {
+        Some(hostname) => Some(hostname),
+        None => match std::env::var("HOST") {
+            Ok(hostname) => Some(hostname),
+            Err(VarError::NotPresent) => None,
+            Err(_) => bail!("HOST was specified but not utf-8"),
+        },
+    };
     let project_directory = match args.project_directory {
         Some(pwd) => Some(pwd.to_owned()),
         None => match std::env::var("COMPOSE_PROJECT_DIRECTORY") {
@@ -65,10 +85,19 @@ async fn main() -> Result<()> {
             bail!("run logs path is not a directory: {}", run_logs.display());
         }
     }
+    let slack_webhook_url = match args.slack_webhook_url {
+        Some(url) => Some(url),
+        None => match std::env::var("SLACK_WEBHOOK_URL") {
+            Ok(url) => Some(url),
+            Err(VarError::NotPresent) => None,
+            Err(_) => bail!("SLACK_WEBHOOK_URL was specified but not utf-8"),
+        },
+    };
     let context = ComposeContext {
         compose_file: args.compose_file.to_owned(),
         env_file: args.env_file.map(|f| f.to_owned()),
         project_directory,
+        hostname,
     };
     let compose = load_compose_config(&context, Some("*")).await?;
     let mut scheduler = JoinSet::new();
@@ -76,6 +105,14 @@ async fn main() -> Result<()> {
         debug!("parsing service: {name}");
         if let Some(service) = service.as_ref() {
             if let Some(labels) = service.labels.as_ref() {
+                let maybe_slack_webhook_url = if labels
+                    .get("co.architect.composer.notify.slack")
+                    .is_some_and(|v| v == "true" || v == "1")
+                {
+                    slack_webhook_url.clone()
+                } else {
+                    None
+                };
                 for (key, value) in labels {
                     let action = if RUN_KEYS.contains(&key.as_str()) {
                         ComposeAction::Run
@@ -94,6 +131,7 @@ async fn main() -> Result<()> {
                         schedule,
                         name.clone(),
                         run_logs.clone(),
+                        maybe_slack_webhook_url.clone(),
                     ));
                     // for up in schedule.upcoming(Utc).take(3) {
                     //     println!("  -> {}", up);
@@ -112,6 +150,7 @@ async fn run_on_schedule(
     schedule: Schedule,
     service: String,
     run_logs: Option<PathBuf>,
+    slack_webhook_url: Option<String>,
 ) {
     loop {
         let up = match schedule.upcoming(Utc).next() {
@@ -123,7 +162,7 @@ async fn run_on_schedule(
         };
         let duration_from_now = (up - Utc::now()).to_std().unwrap();
         info!(
-            "next {action} for {service} in {} at {up}",
+            "next {action} for {service} in {}",
             humantime::format_duration(duration_from_now)
         );
         tokio::time::sleep(duration_from_now).await;
@@ -192,5 +231,58 @@ async fn run_on_schedule(
         } else {
             info!("{} {service} succeeded", action.as_gerund());
         }
+        if let Some(webhook_url) = slack_webhook_url.as_deref() {
+            if let Err(e) = notify_slack(
+                webhook_url,
+                context.hostname.as_deref(),
+                &service,
+                action,
+                out.status.success(),
+                up,
+            )
+            .await
+            {
+                error!("error notifying slack: {e:?}");
+            }
+        }
     }
+}
+
+async fn notify_slack(
+    webhook_url: &str,
+    hostname: Option<&str>,
+    service: &str,
+    action: ComposeAction,
+    exit_success: bool,
+    next_action_at: DateTime<Utc>,
+) -> Result<()> {
+    let mut lines = vec![];
+    lines.push(format!(
+        "{} *{}* {}",
+        if exit_success { "✅" } else { "❌" },
+        if let Some(hostname) = hostname {
+            format!("{hostname}.{service}")
+        } else {
+            service.to_string()
+        },
+        action.as_past_participle(),
+    ));
+    // if exit_success && !stdout_s.is_empty() {
+    //     lines.push(format!("```\n{stdout_s}\n```"));
+    // } else if !stderr_s.is_empty() {
+    //     lines.push(format!("```\n{stderr_s}\n```"));
+    // }
+    lines.push(format!(
+        "<!date^{}^Next {action} at {{date_num}} {{time_sces}}|Next {action} at {next_action_at}",
+        next_action_at.timestamp()
+    ));
+    let text =
+        lines.iter().map(|line| format!("> {line}")).collect::<Vec<_>>().join("\n");
+    let client = reqwest::Client::new();
+    let res = client.post(webhook_url).json(&json!({ "text": text })).send().await?;
+    if !res.status().is_success() {
+        let err_body = res.text().await.context("reading response body")?;
+        return Err(anyhow!("{err_body}"));
+    }
+    Ok(())
 }

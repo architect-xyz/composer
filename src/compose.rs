@@ -8,9 +8,10 @@ pub struct ComposeContext {
     pub compose_file: PathBuf,
     pub env_file: Option<PathBuf>,
     pub project_directory: Option<String>,
+    pub hostname: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ComposeAction {
     Run,
     Restart,
@@ -21,6 +22,13 @@ impl ComposeAction {
         match self {
             ComposeAction::Run => "running",
             ComposeAction::Restart => "restarting",
+        }
+    }
+
+    pub fn as_past_participle(&self) -> &str {
+        match self {
+            ComposeAction::Run => "run",
+            ComposeAction::Restart => "restarted",
         }
     }
 }
