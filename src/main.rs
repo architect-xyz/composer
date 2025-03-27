@@ -43,6 +43,8 @@ struct Args {
     /// co.architect.composer.notify.slack=true
     #[clap(long)]
     slack_webhook_url: Option<String>,
+    #[clap(long)]
+    slack_webhook_on_error_url: Option<String>,
 }
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
@@ -93,6 +95,14 @@ async fn main() -> Result<()> {
             Err(_) => bail!("SLACK_WEBHOOK_URL was specified but not utf-8"),
         },
     };
+    let slack_webhook_on_error_url = match args.slack_webhook_on_error_url {
+        Some(url) => Some(url),
+        None => match std::env::var("SLACK_WEBHOOK_ON_ERROR_URL") {
+            Ok(url) => Some(url),
+            Err(VarError::NotPresent) => None,
+            Err(_) => bail!("SLACK_WEBHOOK_ON_ERROR_URL was specified but not utf-8"),
+        },
+    };
     let context = ComposeContext {
         compose_file: args.compose_file.to_owned(),
         env_file: args.env_file.map(|f| f.to_owned()),
@@ -110,6 +120,14 @@ async fn main() -> Result<()> {
                     .is_some_and(|v| v == "true" || v == "1")
                 {
                     slack_webhook_url.clone()
+                } else {
+                    None
+                };
+                let maybe_slack_webhook_on_error_url = if labels
+                    .get("co.architect.composer.notify.slack.on-error")
+                    .is_some_and(|v| v == "true" || v == "1")
+                {
+                    slack_webhook_on_error_url.clone()
                 } else {
                     None
                 };
@@ -132,6 +150,7 @@ async fn main() -> Result<()> {
                         name.clone(),
                         run_logs.clone(),
                         maybe_slack_webhook_url.clone(),
+                        maybe_slack_webhook_on_error_url.clone(),
                     ));
                     // for up in schedule.upcoming(Utc).take(3) {
                     //     println!("  -> {}", up);
@@ -151,6 +170,7 @@ async fn run_on_schedule(
     service: String,
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
+    slack_webhook_on_error_url: Option<String>,
 ) {
     loop {
         let up = match schedule.upcoming(Utc).next() {
@@ -243,6 +263,22 @@ async fn run_on_schedule(
             .await
             {
                 error!("error notifying slack: {e:?}");
+            }
+        }
+        if let Some(webhook_url) = slack_webhook_on_error_url.as_deref() {
+            if !out.status.success() {
+                if let Err(e) = notify_slack(
+                    webhook_url,
+                    context.hostname.as_deref(),
+                    &service,
+                    action,
+                    out.status.success(),
+                    up,
+                )
+                .await
+                {
+                    error!("error notifying slack: {e:?}");
+                }
             }
         }
     }
