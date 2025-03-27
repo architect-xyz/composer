@@ -1,7 +1,7 @@
 name: composer_example
 services:
   say_hello_world:
-    profiles: [ "jobs" ]
+    profiles: ["jobs"]
     image: "alpine:3.12"
     command: sh /say_hello.sh
     stdin_open: true
@@ -11,6 +11,7 @@ services:
     labels:
       # run this service every thirty seconds
       - "co.architect.composer.run=*/30 * * * * *"
+      - "co.architect.composer.notify.slack=true"
 
   repeat_myself:
     image: "alpine:3.12"
@@ -24,6 +25,7 @@ services:
     labels:
       # restart this service every minute
       - "co.architect.composer.restart=0 * * * * *"
+      - "co.architect.composer.notify.slack=true"
 
   scheduler:
     image: "afintech/composer:latest"
@@ -32,6 +34,8 @@ services:
       - RUST_LOG=composer=debug
       - COMPOSE_PROJECT_DIRECTORY=${PWD}
       - COMPOSE_RUN_LOGS=/var/log/composer
+      - HOST=my-host
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # mount in the docker compose configuration

@@ -273,7 +273,7 @@ async fn notify_slack(
     //     lines.push(format!("```\n{stderr_s}\n```"));
     // }
     lines.push(format!(
-        "<!date^{}^Next {action} at {{date_num}} {{time_sces}}|Next {action} at {next_action_at}",
+        "<!date^{}^Next {action} at {{date_num}} {{time_secs}}|Next {action} at {next_action_at}>",
         next_action_at.timestamp()
     ));
     let text =

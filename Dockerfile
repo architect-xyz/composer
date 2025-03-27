@@ -1,5 +1,5 @@
 FROM rust:1.81-alpine AS builder
-RUN apk add --no-cache musl-dev
+RUN apk add --no-cache musl-dev libressl-dev
 ADD . /composer
 WORKDIR /composer
 RUN cargo build --release
