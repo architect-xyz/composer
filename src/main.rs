@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 
 mod compose;
 mod compose_types;
+mod scheduler;
 
 /// Scheduler for docker-compose services
 ///
@@ -36,6 +37,9 @@ struct Args {
     /// You may also set this via env var HOST.
     #[clap(long)]
     hostname: Option<String>,
+    /// Run `docker image prune -f` on the provided schedule.
+    #[clap(long)]
+    prune_images: Option<String>,
     /// Slack webhook URL for notifications.
     /// You may also set this via env var SLACK_WEBHOOK_URL.
     ///
@@ -103,6 +107,14 @@ async fn main() -> Result<()> {
             Err(_) => bail!("SLACK_WEBHOOK_ON_ERROR_URL was specified but not utf-8"),
         },
     };
+    let prune_images = match args.prune_images {
+        Some(prune_images) => Some(prune_images),
+        None => match std::env::var("PRUNE_IMAGES") {
+            Ok(prune_images) => Some(prune_images),
+            Err(VarError::NotPresent) => None,
+            Err(_) => bail!("PRUNE_IMAGES was specified but not utf-8"),
+        },
+    };
     let context = ComposeContext {
         compose_file: args.compose_file.to_owned(),
         env_file: args.env_file.map(|f| f.to_owned()),
@@ -158,6 +170,21 @@ async fn main() -> Result<()> {
                 }
             }
         }
+    }
+    // add pruning tasks
+    if let Some(prune_images) = prune_images {
+        let schedule: Schedule = prune_images
+            .parse()
+            .with_context(|| format!("while parsing cron expression: {prune_images}"))?;
+        scheduler.spawn(scheduler::run_command_on_schedule(
+            context.clone(),
+            schedule,
+            "prune images",
+            "docker",
+            &["image", "prune", "-f"],
+            slack_webhook_url.clone(),
+            slack_webhook_on_error_url.clone(),
+        ));
     }
     scheduler.join_all().await;
     Ok(())
