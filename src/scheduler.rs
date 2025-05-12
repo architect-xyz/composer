@@ -42,6 +42,7 @@ pub async fn run_command_on_schedule(
                         url,
                         context.hostname.as_deref(),
                         action,
+                        "".to_string(),
                         e.to_string(),
                         false,
                         up,
@@ -63,6 +64,7 @@ pub async fn run_command_on_schedule(
                         url,
                         context.hostname.as_deref(),
                         action,
+                        "".to_string(),
                         e.to_string(),
                         false,
                         up,
@@ -85,6 +87,7 @@ pub async fn run_command_on_schedule(
                 webhook_url,
                 context.hostname.as_deref(),
                 action,
+                String::from_utf8(out.stdout.clone()).unwrap_or_default(),
                 String::from_utf8(out.stderr.clone()).unwrap_or_default(),
                 out.status.success(),
                 up,
@@ -100,6 +103,7 @@ pub async fn run_command_on_schedule(
                     webhook_url,
                     context.hostname.as_deref(),
                     action,
+                    String::from_utf8(out.stdout).unwrap_or_default(),
                     String::from_utf8(out.stderr).unwrap_or_default(),
                     out.status.success(),
                     up,
@@ -117,6 +121,7 @@ async fn notify_slack(
     webhook_url: &str,
     hostname: Option<&str>,
     action: &str,
+    stdout_s: String,
     stderr_s: String,
     exit_success: bool,
     next_action_at: DateTime<Utc>,
@@ -132,6 +137,9 @@ async fn notify_slack(
         },
         action,
     ));
+    if !stdout_s.is_empty() {
+        lines.push(format!("```\n{stdout_s}\n```"));
+    }
     if !exit_success && !stderr_s.is_empty() {
         lines.push(format!("```\n{stderr_s}\n```"));
     }
