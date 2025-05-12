@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use cron::Schedule;
 use log::{error, info, warn};
 use serde_json::json;
+use std::process::Stdio;
 
 pub async fn run_command_on_schedule(
     context: ComposeContext,
@@ -32,7 +33,7 @@ pub async fn run_command_on_schedule(
         let args_s = args.iter().cloned().collect::<Vec<_>>().join(" ");
         info!("{action}: running `{command} {args_s}`...");
         let mut cmd = tokio::process::Command::new(command);
-        cmd.args(args);
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
