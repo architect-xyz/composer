@@ -1,4 +1,4 @@
-FROM rust:1.81-alpine AS builder
+FROM rust:1.84-alpine AS builder
 RUN apk add --no-cache musl-dev libressl-dev
 ADD . /composer
 WORKDIR /composer
