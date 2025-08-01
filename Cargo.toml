@@ -3,6 +3,10 @@ name = "composer"
 version = "0.2.0"
 edition = "2021"
 
+[[bin]]
+name = "test_metrics"
+path = "src/bin/test_metrics.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = "0.4"
@@ -12,8 +16,23 @@ cron = "0.12"
 env_logger = "0.11"
 humantime = "2.1.0"
 log = "0.4"
+metrics = "0.24.2"
+metrics-exporter-opentelemetry = "0.1.2"
+opentelemetry = "*"
+opentelemetry-otlp = { version = "0.30.0", features = [
+    "http-proto",
+    "trace",
+    "metrics",
+    "logs",
+    "internal-logs",
+] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9.33"
-tokio = { version = "1", features = ["rt", "macros", "process", "time"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "time",
+] }

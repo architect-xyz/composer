@@ -29,7 +29,7 @@ services:
       - "co.architect.composer.restart=0 * * * * *"
       - "co.architect.composer.notify.slack=true"
 
-  scheduler:
+  composer:
     image: "afintech/composer:latest"
     environment:
       # recommended to set log level to debug
@@ -47,3 +47,10 @@ services:
       - ./.env:/.env:ro
       # mount in logs directory for run logs
       - ./var/logs:/var/log/composer:rw
+
+  # Debug endpoint for test_metrics.rs
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    ports:
+      - 4317:4317 # OTLP gRPC receiver
+      - 4318:4318 # OTLP http receiver
