@@ -3,7 +3,8 @@ use log::info;
 use metrics::{counter, gauge};
 use std::time::Duration;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     env_logger::init();
 
     // Set environment variables for OTLP collector:
@@ -47,10 +48,10 @@ fn main() -> Result<()> {
         info!("setting gauge and counter");
         gauge.set(2.0);
         counter.increment(1);
-        std::thread::sleep(Duration::from_secs(1));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    std::thread::sleep(Duration::from_secs(10));
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     Ok(())
 }
