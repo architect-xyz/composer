@@ -11,6 +11,7 @@ use tokio::task::JoinSet;
 mod compose;
 mod compose_types;
 mod scheduler;
+mod system_monitor;
 
 /// Scheduler for docker-compose services
 ///
@@ -37,6 +38,15 @@ struct Args {
     /// You may also set this via env var HOST.
     #[clap(long)]
     hostname: Option<String>,
+    /// If set, run the system monitor (CPU, memory, disk alerting) using
+    /// the specified config file.  Or, set to "true" or "1" to use the
+    /// default system monitor config.  
+    ///
+    /// The application must have root access to the host.
+    ///
+    /// You may also set this via env var SYSTEM_MONITOR.
+    #[clap(long, env = "SYSTEM_MONITOR")]
+    system_monitor: Option<String>,
     /// Run `docker image prune -f` on the provided schedule.
     #[clap(long)]
     prune_images: Option<String>,
@@ -59,10 +69,10 @@ async fn main() -> Result<()> {
     env_logger::init();
     let args = Args::parse();
     let hostname = match args.hostname {
-        Some(hostname) => Some(hostname),
+        Some(hostname) => hostname,
         None => match std::env::var("HOST") {
-            Ok(hostname) => Some(hostname),
-            Err(VarError::NotPresent) => None,
+            Ok(hostname) => hostname,
+            Err(VarError::NotPresent) => hostname::get()?.to_string_lossy().to_string(),
             Err(_) => bail!("HOST was specified but not utf-8"),
         },
     };
@@ -91,10 +101,18 @@ async fn main() -> Result<()> {
             bail!("run logs path is not a directory: {}", run_logs.display());
         }
     }
+    let sanitize_url = |url: String| {
+        if url.trim().is_empty() {
+            warn!("ignoring malformed slack webhook URL: {url}");
+            None
+        } else {
+            Some(url)
+        }
+    };
     let slack_webhook_url = match args.slack_webhook_url {
         Some(url) => Some(url),
         None => match std::env::var("SLACK_WEBHOOK_URL") {
-            Ok(url) => Some(url),
+            Ok(url) => sanitize_url(url),
             Err(VarError::NotPresent) => None,
             Err(_) => bail!("SLACK_WEBHOOK_URL was specified but not utf-8"),
         },
@@ -102,7 +120,7 @@ async fn main() -> Result<()> {
     let slack_webhook_on_error_url = match args.slack_webhook_on_error_url {
         Some(url) => Some(url),
         None => match std::env::var("SLACK_WEBHOOK_ON_ERROR_URL") {
-            Ok(url) => Some(url),
+            Ok(url) => sanitize_url(url),
             Err(VarError::NotPresent) => None,
             Err(_) => bail!("SLACK_WEBHOOK_ON_ERROR_URL was specified but not utf-8"),
         },
@@ -170,6 +188,31 @@ async fn main() -> Result<()> {
                 }
             }
         }
+    }
+    // add system monitor task
+    if let Some(config_file) = args.system_monitor {
+        let config: system_monitor::SystemMonitorConfig =
+            if config_file.to_lowercase() == "true" || config_file == "1" {
+                system_monitor::SystemMonitorConfig::default()
+            } else {
+                let config_s = std::fs::read_to_string(config_file)?;
+                serde_yaml::from_str(&config_s)?
+            };
+        let context = context.clone();
+        let slack_webhook_url = slack_webhook_url.clone();
+        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        scheduler.spawn(async move {
+            if let Err(e) = system_monitor::run(
+                context.hostname,
+                config,
+                slack_webhook_url,
+                slack_webhook_on_error_url,
+            )
+            .await
+            {
+                panic!("while running system monitor: {e:?}");
+            }
+        });
     }
     // add pruning tasks
     if let Some(prune_images) = prune_images {
@@ -281,7 +324,7 @@ async fn run_on_schedule(
         if let Some(webhook_url) = slack_webhook_url.as_deref() {
             if let Err(e) = notify_slack(
                 webhook_url,
-                context.hostname.as_deref(),
+                &context.hostname,
                 &service,
                 action,
                 out.status.success(),
@@ -296,7 +339,7 @@ async fn run_on_schedule(
             if !out.status.success() {
                 if let Err(e) = notify_slack(
                     webhook_url,
-                    context.hostname.as_deref(),
+                    &context.hostname,
                     &service,
                     action,
                     out.status.success(),
@@ -313,7 +356,7 @@ async fn run_on_schedule(
 
 async fn notify_slack(
     webhook_url: &str,
-    hostname: Option<&str>,
+    hostname: &str,
     service: &str,
     action: ComposeAction,
     exit_success: bool,
@@ -321,13 +364,8 @@ async fn notify_slack(
 ) -> Result<()> {
     let mut lines = vec![];
     lines.push(format!(
-        "{} *{}* {}",
+        "{} *{hostname}.{service}* {}",
         if exit_success { "✅" } else { "❌" },
-        if let Some(hostname) = hostname {
-            format!("{hostname}.{service}")
-        } else {
-            service.to_string()
-        },
         action.as_past_participle(),
     ));
     // if exit_success && !stdout_s.is_empty() {

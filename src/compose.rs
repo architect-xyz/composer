@@ -8,7 +8,7 @@ pub struct ComposeContext {
     pub compose_file: PathBuf,
     pub env_file: Option<PathBuf>,
     pub project_directory: Option<String>,
-    pub hostname: Option<String>,
+    pub hostname: String,
 }
 
 #[derive(Debug, Clone, Copy)]

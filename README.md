@@ -30,3 +30,16 @@ services:
       # you may also need to mount the env file into the compose --project-directory
       - ./.env:${PWD}/.env:ro
 ```
+
+## Host system monitoring from inside Docker
+
+Composer can also monitor and alert on host system metrics (CPU, memory, disk).  To do this, the container must have privileged access to the host.  Use the following service config to ensure the correct access:
+
+```
+composer:
+  # ...
+  pid: host
+  ipc: host
+  privileged: true
+  network_mode: host
+```

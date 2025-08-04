@@ -41,7 +41,7 @@ pub async fn run_command_on_schedule(
                 if let Some(url) = slack_webhook_on_error_url.as_deref() {
                     if let Err(e) = notify_slack(
                         url,
-                        context.hostname.as_deref(),
+                        &context.hostname,
                         action,
                         "".to_string(),
                         e.to_string(),
@@ -63,7 +63,7 @@ pub async fn run_command_on_schedule(
                 if let Some(url) = slack_webhook_on_error_url.as_deref() {
                     if let Err(e) = notify_slack(
                         url,
-                        context.hostname.as_deref(),
+                        &context.hostname,
                         action,
                         "".to_string(),
                         e.to_string(),
@@ -86,7 +86,7 @@ pub async fn run_command_on_schedule(
         if let Some(webhook_url) = slack_webhook_url.as_deref() {
             if let Err(e) = notify_slack(
                 webhook_url,
-                context.hostname.as_deref(),
+                &context.hostname,
                 action,
                 String::from_utf8(out.stdout.clone()).unwrap_or_default(),
                 String::from_utf8(out.stderr.clone()).unwrap_or_default(),
@@ -102,7 +102,7 @@ pub async fn run_command_on_schedule(
             if !out.status.success() {
                 if let Err(e) = notify_slack(
                     webhook_url,
-                    context.hostname.as_deref(),
+                    &context.hostname,
                     action,
                     String::from_utf8(out.stdout).unwrap_or_default(),
                     String::from_utf8(out.stderr).unwrap_or_default(),
@@ -120,7 +120,7 @@ pub async fn run_command_on_schedule(
 
 async fn notify_slack(
     webhook_url: &str,
-    hostname: Option<&str>,
+    hostname: &str,
     action: &str,
     stdout_s: String,
     stderr_s: String,
@@ -129,13 +129,8 @@ async fn notify_slack(
 ) -> Result<()> {
     let mut lines = vec![];
     lines.push(format!(
-        "{} *{}* {}",
+        "{} *{hostname}* {}",
         if exit_success { "✅" } else { "❌" },
-        if let Some(hostname) = hostname {
-            format!("{hostname}")
-        } else {
-            "unknown host".to_string()
-        },
         action,
     ));
     if !stdout_s.is_empty() {

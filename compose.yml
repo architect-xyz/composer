@@ -48,6 +48,26 @@ services:
       # mount in logs directory for run logs
       - ./var/logs:/var/log/composer:rw
 
+  composer_as_host_system_monitor:
+    image: afintech/composer:latest
+    environment:
+      - RUST_LOG=composer=trace
+      - COMPOSE_PROJECT_DIRECTORY=${PWD}
+      - COMPOSE_RUN_LOGS=/var/log/composer
+      - HOST=my-host
+      - SYSTEM_MONITOR=true
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - SLACK_WEBHOOK_ON_ERROR_URL=${SLACK_WEBHOOK_ON_ERROR_URL}
+    pid: host
+    ipc: host
+    privileged: true
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./compose.yml:/compose.yml:ro
+      - ./.env:/.env:ro
+      - ./var/logs:/var/log/composer:rw
+
   # Debug endpoint for test_metrics.rs
   otel-collector:
     image: otel/opentelemetry-collector:latest
