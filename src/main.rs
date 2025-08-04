@@ -10,6 +10,7 @@ use tokio::task::JoinSet;
 
 mod compose;
 mod compose_types;
+mod container_monitor;
 mod scheduler;
 mod system_monitor;
 
@@ -141,8 +142,10 @@ async fn main() -> Result<()> {
     };
     let compose = load_compose_config(&context, Some("*")).await?;
     let mut scheduler = JoinSet::new();
+    let mut monitor_containers = vec![];
     for (name, service) in &compose.services {
         debug!("parsing service: {name}");
+        let mut should_monitor = true;
         if let Some(service) = service.as_ref() {
             if let Some(labels) = service.labels.as_ref() {
                 let maybe_slack_webhook_url = if labels
@@ -163,31 +166,54 @@ async fn main() -> Result<()> {
                 };
                 for (key, value) in labels {
                     let action = if RUN_KEYS.contains(&key.as_str()) {
+                        // don't monitor services that are run one-shot
+                        should_monitor = false;
                         ComposeAction::Run
                     } else if RESTART_KEYS.contains(&key.as_str()) {
                         ComposeAction::Restart
                     } else {
                         continue;
                     };
-                    let schedule: Schedule = value.parse().with_context(|| {
-                        format!("while parsing cron expression: {value}")
-                    })?;
-                    info!("service {name} has a {action} schedule: {schedule}");
-                    scheduler.spawn(run_on_schedule(
-                        context.clone(),
-                        action,
-                        schedule,
-                        name.clone(),
-                        run_logs.clone(),
-                        maybe_slack_webhook_url.clone(),
-                        maybe_slack_webhook_on_error_url.clone(),
-                    ));
+                    if value != "manual" {
+                        let schedule: Schedule = value.parse().with_context(|| {
+                            format!("while parsing cron expression: {value}")
+                        })?;
+                        info!("service {name} has a {action} schedule: {schedule}");
+                        scheduler.spawn(run_on_schedule(
+                            context.clone(),
+                            action,
+                            schedule,
+                            name.clone(),
+                            run_logs.clone(),
+                            maybe_slack_webhook_url.clone(),
+                            maybe_slack_webhook_on_error_url.clone(),
+                        ));
+                    }
                     // for up in schedule.upcoming(Utc).take(3) {
                     //     println!("  -> {}", up);
                     // }
                 }
             }
         }
+        if should_monitor {
+            monitor_containers.push(name.clone());
+        }
+    }
+    // add container monitor task
+    {
+        let context = context.clone();
+        let slack_webhook_url = slack_webhook_url.clone();
+        scheduler.spawn(async move {
+            if let Err(e) = container_monitor::run(
+                context.hostname,
+                monitor_containers,
+                slack_webhook_url.clone(),
+            )
+            .await
+            {
+                panic!("while running container monitor: {e:?}");
+            }
+        });
     }
     // add system monitor task
     if let Some(config_file) = args.system_monitor {
