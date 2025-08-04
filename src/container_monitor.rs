@@ -1,3 +1,4 @@
+use crate::compose::ComposeContext;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use log::{error, trace};
@@ -21,7 +22,7 @@ struct ServiceStatus {
 }
 
 pub async fn run(
-    host_name: String,
+    context: ComposeContext,
     services: Vec<String>,
     slack_webhook_url: Option<String>,
 ) -> Result<()> {
@@ -33,8 +34,14 @@ pub async fn run(
         check_interval.tick().await;
         let now = Utc::now();
         let mut cmd = tokio::process::Command::new("docker");
-        cmd.arg("compose")
-            .arg("ps")
+        cmd.arg("compose").arg("-f").arg(context.compose_file.as_os_str());
+        if let Some(env_file) = &context.env_file {
+            cmd.arg("--env-file").arg(env_file.as_os_str());
+        }
+        if let Some(project_directory) = &context.project_directory {
+            cmd.arg("--project-directory").arg(project_directory.as_str());
+        }
+        cmd.arg("ps")
             .arg("--format")
             .arg("json")
             .stdout(Stdio::piped())
@@ -60,7 +67,11 @@ pub async fn run(
             };
             let status = status_board.entry(service.clone()).or_default();
             let last_running = status.last_running.unwrap_or(DateTime::<Utc>::MIN_UTC);
-            if !is_running && (now - last_running).num_seconds() >= 30 {
+            let is_running_changed = Some(is_running) != status.is_running;
+            if !is_running
+                && is_running_changed
+                && (now - last_running).num_seconds() >= 30
+            {
                 should_notify = true;
             }
             status.is_running = Some(is_running);
@@ -70,7 +81,9 @@ pub async fn run(
         }
         if should_notify {
             if let Some(url) = slack_webhook_url.as_deref() {
-                if let Err(e) = notify_slack(url, &host_name, now, &status_board).await {
+                if let Err(e) =
+                    notify_slack(url, &context.hostname, now, &status_board).await
+                {
                     error!("error notifying slack: {e:?}");
                 }
             }

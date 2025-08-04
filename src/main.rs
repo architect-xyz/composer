@@ -205,7 +205,7 @@ async fn main() -> Result<()> {
         let slack_webhook_url = slack_webhook_url.clone();
         scheduler.spawn(async move {
             if let Err(e) = container_monitor::run(
-                context.hostname,
+                context.clone(),
                 monitor_containers,
                 slack_webhook_url.clone(),
             )
