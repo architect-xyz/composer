@@ -4,6 +4,10 @@ Run or restart docker-compose services on a cron schedule.  This composer can it
 
 Compared to `ofelia` and `reddec/compose-scheduler`, the novel approach taken here is to leverage the Docker CLI itself to parse a compose configuration.  This allows us to use the simple labeling scheme without the shortcomings of only liaising with the Docker daemon.  This allows us to pick up compose file changes on the fly, run scheduled tasks that haven't been run for a first time, and restart compose services as if the host itself were restarting them.
 
+Composer can also collect host metrics such as CPU, memory, and disk usage, and push those metrics to an OpenTelemetry collector.
+
+Finally, composer also provides container monitoring and alerting.
+
 ## Usage
 
 Add `afintech/composer:latest` as a service to your docker compose file.  Generally, the
@@ -43,3 +47,28 @@ composer:
   privileged: true
   network_mode: host
 ```
+
+### Sending host metrics to OpenTelemetry
+
+Set the following environment variables to push host metrics (CPU, memory, disk usage) to an OpenTelemetry collector:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT`: OTEL collector endpoint (required)
+- `OTEL_EXPORTER_OTLP_HEADERS`: `key1=value1,key2=value2` OTEL collector HTTP headers (optional)
+- `OTEL_METRIC_EXPORT_INTERVAL`: batch time in milliseconds (optional, default=5000)
+
+The following metrics will be pushed:
+
+- `memory.used_pct`: Percentage of memory currently in use.
+- `memory.used_bytes`: Total bytes of memory currently in use.
+- `memory.total_bytes`: Total bytes of memory available.
+- `swap.used_pct`: Percentage of swap space currently in use.
+- `swap.used_bytes`: Total bytes of swap space currently in use.
+- `swap.total_bytes`: Total bytes of swap space available.
+- `disk.used_pct`: Percentage of disk space currently in use (root disk only).
+- `disk.used_bytes`: Total bytes of disk space currently in use (root disk only).
+- `disk.total_bytes`: Total bytes of disk space available (root disk only).
+
+Metrics will have the following scope attributes set:
+
+- `host.name`: the configured `HOST` or hostname
+- `service.name`: always `composer`
