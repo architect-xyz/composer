@@ -25,6 +25,7 @@ pub async fn run(
     context: ComposeContext,
     services: Vec<String>,
     slack_webhook_url: Option<String>,
+    slack_webhook_on_error_url: Option<String>,
 ) -> Result<()> {
     let mut status_board: BTreeMap<String, ServiceStatus> = BTreeMap::new();
     let mut check_interval = tokio::time::interval(Duration::from_secs(60));
@@ -80,9 +81,21 @@ pub async fn run(
             }
         }
         if should_notify {
-            if let Some(url) = slack_webhook_url.as_deref() {
-                if let Err(e) =
-                    notify_slack(url, &context.hostname, now, &status_board).await
+            let mut slack_webhook_urls = vec![];
+            if let Some(url) = &slack_webhook_url {
+                slack_webhook_urls.push(url.clone());
+            }
+            if let Some(url) = &slack_webhook_on_error_url {
+                slack_webhook_urls.push(url.clone());
+            }
+            for slack_webhook_url in slack_webhook_urls {
+                if let Err(e) = notify_slack(
+                    slack_webhook_url.as_str(),
+                    &context.hostname,
+                    now,
+                    &status_board,
+                )
+                .await
                 {
                     error!("error notifying slack: {e:?}");
                 }
@@ -108,7 +121,7 @@ async fn notify_slack(
     lines.push("".to_string());
     for (service, status) in services {
         let status_emoji =
-            if status.is_running.unwrap_or(false) { "🟢" } else { "🔴" };
+            if status.is_running.unwrap_or(false) { "🟩" } else { "🟥" };
         lines.push(format!("{status_emoji} {service}"));
     }
     let text =

@@ -203,11 +203,13 @@ async fn main() -> Result<()> {
     {
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
+        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
         scheduler.spawn(async move {
             if let Err(e) = container_monitor::run(
                 context.clone(),
                 monitor_containers,
                 slack_webhook_url.clone(),
+                slack_webhook_on_error_url.clone(),
             )
             .await
             {
