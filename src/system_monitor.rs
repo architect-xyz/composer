@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
-use log::{info, trace};
+use log::{info, trace, warn};
+use metrics::gauge;
+use metrics_exporter_opentelemetry::Recorder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, str::FromStr, time::Duration};
@@ -74,6 +76,14 @@ pub async fn run(
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
 ) -> Result<()> {
+    // initialize telemetry, if the environment variables are set
+    let _recorder = match initialize_telemetry(&host_name) {
+        Ok(recorder) => Some(recorder),
+        Err(e) => {
+            warn!("failed to initialize telemetry, metrics will not be collected: {e:?}");
+            None
+        }
+    };
     let mut sys = System::new_all();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -88,6 +98,18 @@ pub async fn run(
         ),
         None => None,
     };
+
+    let gauge_memory_used_pct = gauge!("memory.used_pct");
+    let gauge_memory_used_bytes = gauge!("memory.used_bytes");
+    let gauge_memory_total_bytes = gauge!("memory.total_bytes");
+    let gauge_swap_used_pct = gauge!("swap.used_pct");
+    let gauge_swap_used_bytes = gauge!("swap.used_bytes");
+    let gauge_swap_total_bytes = gauge!("swap.total_bytes");
+    // root disk "/" only
+    let gauge_disk_used_pct = gauge!("disk.used_pct");
+    let gauge_disk_used_bytes = gauge!("disk.used_bytes");
+    let gauge_disk_total_bytes = gauge!("disk.total_bytes");
+
     loop {
         interval.tick().await;
         sys.refresh_all();
@@ -100,6 +122,13 @@ pub async fn run(
         trace!("  total swap: {} bytes", sys.total_swap());
         trace!("   used swap: {} bytes ({:.2}%)", sys.used_swap(), pct_swap_used);
         trace!("---");
+
+        gauge_memory_used_pct.set(pct_mem_used);
+        gauge_memory_used_bytes.set(sys.used_memory() as f64);
+        gauge_memory_total_bytes.set(sys.total_memory() as f64);
+        gauge_swap_used_pct.set(pct_swap_used);
+        gauge_swap_used_bytes.set(sys.used_swap() as f64);
+        gauge_swap_total_bytes.set(sys.total_swap() as f64);
 
         if let Some(warn_memory_pct) = config.warn_memory_pct {
             let unwarn_memory_pct = config.unwarn_memory_pct.unwrap_or(warn_memory_pct);
@@ -139,6 +168,14 @@ pub async fn run(
                 disk.total_space(),
                 disk_mount,
             );
+
+            if disk_mount == "/" {
+                gauge_disk_used_pct.set(pct_disk_used);
+                gauge_disk_used_bytes
+                    .set((disk.total_space() - disk.available_space()) as f64);
+                gauge_disk_total_bytes.set(disk.total_space() as f64);
+            }
+
             if let Some(warn_disk_pct) = config.warn_disk_pct {
                 let unwarn_disk_pct = config.unwarn_disk_pct.unwrap_or(warn_disk_pct);
                 if pct_disk_used >= warn_disk_pct {
@@ -216,4 +253,23 @@ async fn notify_slack_with_changes(
         return Err(anyhow!("{err_body}"));
     }
     Ok(())
+}
+
+fn initialize_telemetry(host_name: &str) -> Result<Recorder> {
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::MetricExporterBuilder;
+    let otlp_exporter = MetricExporterBuilder::new().with_http().build()?;
+    let recorder = Recorder::builder(env!("CARGO_PKG_NAME"))
+        .with_instrumentation_scope(|scope| {
+            scope.with_attributes([
+                KeyValue::new("host.name", host_name.to_string()),
+                KeyValue::new("service.name", "composer"),
+            ])
+        })
+        .with_meter_provider(|mpb| {
+            // Periodically push out with our OTLP exporter
+            mpb.with_periodic_exporter(otlp_exporter)
+        })
+        .install_global()?;
+    Ok(recorder)
 }
