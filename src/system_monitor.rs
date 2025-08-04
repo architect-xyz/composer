@@ -3,10 +3,10 @@ use chrono::{DateTime, Utc};
 use log::{info, trace};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::{collections::HashMap, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, str::FromStr, time::Duration};
 use sysinfo::{Disks, System};
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMonitorConfig {
     /// Warn if memory usage exceeds this percentage
     #[serde(default = "default_warn_memory_pct")]
@@ -50,7 +50,7 @@ struct SystemMonitorStatus {
     memory_warning: Option<f64>,
     swap_warning: Option<f64>,
     // disk mount name => (percentage used, total size in bytes)
-    disk_warnings: HashMap<String, (f64, u64)>,
+    disk_warnings: BTreeMap<String, (f64, u64)>,
 }
 
 impl SystemMonitorStatus {
@@ -63,7 +63,8 @@ impl SystemMonitorStatus {
     fn is_qualitatively_different(&self, other: &Self) -> bool {
         self.memory_warning.is_some() != other.memory_warning.is_some()
             || self.swap_warning.is_some() != other.swap_warning.is_some()
-            || self.disk_warnings.len() != other.disk_warnings.len()
+            || self.disk_warnings.keys().collect::<Vec<_>>()
+                != other.disk_warnings.keys().collect::<Vec<_>>()
     }
 }
 
@@ -120,14 +121,18 @@ pub async fn run(
 
         let disks = Disks::new_with_refreshed_list();
         for disk in &disks {
+            if disk.total_space() == 0 {
+                continue;
+            }
             if let Some(size_threshold) = disk_size_threshold {
                 if disk.total_space() < size_threshold {
                     continue;
                 }
             }
             let disk_mount = disk.mount_point().to_string_lossy().to_string();
-            let pct_disk_used =
-                disk.available_space() as f64 / disk.total_space() as f64 * 100.0;
+            let pct_disk_used = (1.0
+                - (disk.available_space() as f64 / disk.total_space() as f64))
+                * 100.0;
             trace!(
                 "disk usage {:.2}% of {} bytes total ({})",
                 pct_disk_used,

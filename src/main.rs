@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
     if let Some(config_file) = args.system_monitor {
         let config: system_monitor::SystemMonitorConfig =
             if config_file.to_lowercase() == "true" || config_file == "1" {
-                system_monitor::SystemMonitorConfig::default()
+                serde_yaml::from_str("{}")?
             } else {
                 let config_s = std::fs::read_to_string(config_file)?;
                 serde_yaml::from_str(&config_s)?
