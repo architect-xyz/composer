@@ -69,9 +69,10 @@ pub async fn run(
             let status = status_board.entry(service.clone()).or_default();
             let last_running = status.last_running.unwrap_or(DateTime::<Utc>::MIN_UTC);
             let is_running_changed = Some(is_running) != status.is_running;
-            if !is_running
+            if (!is_running
                 && is_running_changed
-                && (now - last_running).num_seconds() >= 30
+                && (now - last_running).num_seconds() >= 30)
+                || (is_running && is_running_changed)
             {
                 should_notify = true;
             }
