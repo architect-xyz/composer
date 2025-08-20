@@ -35,6 +35,12 @@ services:
       - ./.env:${PWD}/.env:ro
 ```
 
+The scheduler uses container labels to determine when to run or restart them.  For example, the following labels configure the `foo` service to restart every day at 10:00.
+
+```
+TODO
+```
+
 ## Host system monitoring from inside Docker
 
 Composer can also monitor and alert on host system metrics (CPU, memory, disk).  To do this, the container must have privileged access to the host.  Use the following service config to ensure the correct access:

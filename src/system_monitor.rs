@@ -267,6 +267,7 @@ fn initialize_telemetry(host_name: &str) -> Result<Recorder> {
             ])
         })
         .with_meter_provider(|mpb| {
+            // TODO: use with_resource here to tag, not with_instrumentation_scope
             // Periodically push out with our OTLP exporter
             mpb.with_periodic_exporter(otlp_exporter)
         })
