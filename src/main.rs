@@ -1,13 +1,14 @@
 use crate::compose::*;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
 use serde_json::json;
 use std::{env::VarError, fs::File, path::PathBuf};
 use tokio::task::JoinSet;
 
+mod certificate_monitor;
 mod compose;
 mod compose_types;
 mod container_monitor;
@@ -21,7 +22,10 @@ mod system_monitor;
 /// seconds field is first) to schedule runs or restarts.
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
-struct Args {
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     // CR alee: try [docker-]compose.{yml,yaml}
     #[clap(short = 'f', default_value = "compose.yml")]
     compose_file: PathBuf,
@@ -41,13 +45,17 @@ struct Args {
     hostname: Option<String>,
     /// If set, run the system monitor (CPU, memory, disk alerting) using
     /// the specified config file.  Or, set to "true" or "1" to use the
-    /// default system monitor config.  
+    /// default system monitor config.
     ///
     /// The application must have root access to the host.
     ///
     /// You may also set this via env var SYSTEM_MONITOR.
     #[clap(long, env = "SYSTEM_MONITOR")]
     system_monitor: Option<String>,
+    /// Path to certificate monitor configuration file.
+    /// You may also set this via env var CERTIFICATE_MONITOR.
+    #[clap(long, env = "CERTIFICATE_MONITOR")]
+    certificate_monitor: Option<String>,
     /// Run `docker image prune -f` on the provided schedule.
     #[clap(long)]
     prune_images: Option<String>,
@@ -62,13 +70,24 @@ struct Args {
     slack_webhook_on_error_url: Option<String>,
 }
 
+#[derive(Subcommand)]
+enum Commands {
+    /// Check SSL certificates once and print status to stdout
+    CheckCerts {
+        /// Path to certificate monitor configuration file.
+        /// If not provided, will use --certificate-monitor or CERTIFICATE_MONITOR env var.
+        #[clap(short = 'c', long)]
+        config: Option<String>,
+    },
+}
+
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
 const RESTART_KEYS: [&str; 1] = ["co.architect.composer.restart"];
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     env_logger::init();
-    let args = Args::parse();
+    let args = Cli::parse();
     let hostname = match args.hostname {
         Some(hostname) => hostname,
         None => match std::env::var("HOST") {
@@ -77,6 +96,24 @@ async fn main() -> Result<()> {
             Err(_) => bail!("HOST was specified but not utf-8"),
         },
     };
+
+    // Handle subcommands
+    if let Some(command) = args.command {
+        return match command {
+            Commands::CheckCerts { config } => {
+                let cert_config = config.or(args.certificate_monitor);
+                if let Some(cert_config) = cert_config {
+                    let config: certificate_monitor::CertificateMonitorConfig =
+                        serde_yaml::from_reader(File::open(&cert_config)
+                            .with_context(|| format!("failed to open certificate monitor config file: {cert_config}"))?
+                        ).with_context(|| format!("failed to parse certificate monitor config file: {cert_config}"))?;
+                    certificate_monitor::check_once(hostname, config).await
+                } else {
+                    bail!("No certificate monitor configuration provided. Use --config, --certificate-monitor, or CERTIFICATE_MONITOR env var");
+                }
+            }
+        };
+    }
     let project_directory = match args.project_directory {
         Some(pwd) => Some(pwd.to_owned()),
         None => match std::env::var("COMPOSE_PROJECT_DIRECTORY") {
@@ -239,6 +276,27 @@ async fn main() -> Result<()> {
             .await
             {
                 panic!("while running system monitor: {e:?}");
+            }
+        });
+    }
+    // add certificate monitor task
+    if let Some(config_file) = args.certificate_monitor {
+        let config_s = std::fs::read_to_string(config_file)?;
+        let config: certificate_monitor::CertificateMonitorConfig =
+            serde_yaml::from_str(&config_s)?;
+        let context = context.clone();
+        let slack_webhook_url = slack_webhook_url.clone();
+        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        scheduler.spawn(async move {
+            if let Err(e) = certificate_monitor::run(
+                context.hostname,
+                config,
+                slack_webhook_url,
+                slack_webhook_on_error_url,
+            )
+            .await
+            {
+                panic!("while running certificate monitor: {e:?}");
             }
         });
     }

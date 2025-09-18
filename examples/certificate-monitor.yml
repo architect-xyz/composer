@@ -1,0 +1,6 @@
+urls:
+  - "https://google.com"
+  - "https://github.com"
+  - "https://expired.badssl.com"
+
+warn_threshold_days: 30
