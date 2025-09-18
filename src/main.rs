@@ -73,7 +73,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Check SSL certificates once and print status to stdout
-    CheckCerts {
+    CheckCertificates {
         /// Path to certificate monitor configuration file.
         /// If not provided, will use --certificate-monitor or CERTIFICATE_MONITOR env var.
         #[clap(short = 'c', long)]
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     // Handle subcommands
     if let Some(command) = args.command {
         return match command {
-            Commands::CheckCerts { config } => {
+            Commands::CheckCertificates { config } => {
                 let cert_config = config.or(args.certificate_monitor);
                 if let Some(cert_config) = cert_config {
                     let config: certificate_monitor::CertificateMonitorConfig =
