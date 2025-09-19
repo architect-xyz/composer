@@ -62,7 +62,9 @@ impl CertificateMonitorStatus {
     }
 }
 
-async fn check_all_certificates(config: &CertificateMonitorConfig) -> CertificateMonitorStatus {
+async fn check_all_certificates(
+    config: &CertificateMonitorConfig,
+) -> CertificateMonitorStatus {
     let mut certificates = Vec::new();
     for url in &config.urls {
         let cert_status = check_certificate(url, config.warn_threshold_days).await;
