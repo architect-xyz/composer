@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use log::{info, trace};
+use pem::parse as pem_parse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::Duration;
@@ -8,6 +9,8 @@ use std::time::Duration;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateMonitorConfig {
     pub urls: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<String>,
     #[serde(default = "default_warn_threshold_days")]
     pub warn_threshold_days: u32,
 }
@@ -18,7 +21,7 @@ fn default_warn_threshold_days() -> u32 {
 
 #[derive(Default, Debug, Clone)]
 struct CertificateStatus {
-    url: String,
+    source: String,
     state: CertificateState,
     days_until_expiry: Option<i64>,
     error: Option<String>,
@@ -54,7 +57,7 @@ impl CertificateMonitorStatus {
         }
 
         for (cert1, cert2) in self.certificates.iter().zip(other.certificates.iter()) {
-            if cert1.url != cert2.url || cert1.state != cert2.state {
+            if cert1.source != cert2.source || cert1.state != cert2.state {
                 return true;
             }
         }
@@ -66,11 +69,21 @@ async fn check_all_certificates(
     config: &CertificateMonitorConfig,
 ) -> CertificateMonitorStatus {
     let mut certificates = Vec::new();
+
+    // Check URLs
     for url in &config.urls {
         let cert_status = check_certificate(url, config.warn_threshold_days).await;
         trace!("certificate status for {}: {:?}", url, cert_status);
         certificates.push(cert_status);
     }
+
+    // Check files
+    for file_path in &config.files {
+        let cert_status = check_certificate(file_path, config.warn_threshold_days).await;
+        trace!("certificate status for {}: {:?}", file_path, cert_status);
+        certificates.push(cert_status);
+    }
+
     CertificateMonitorStatus { certificates }
 }
 
@@ -127,15 +140,23 @@ pub async fn run(
     }
 }
 
-async fn check_certificate(url: &str, warn_threshold_days: u32) -> CertificateStatus {
+async fn check_certificate(source: &str, warn_threshold_days: u32) -> CertificateStatus {
     let mut cert_status = CertificateStatus {
-        url: url.to_string(),
+        source: source.to_string(),
         state: CertificateState::Valid,
         days_until_expiry: None,
         error: None,
     };
 
-    match get_certificate_expiry(url).await {
+    // Determine if this is a URL or file path
+    let expiry_result = if source.starts_with("http://") || source.starts_with("https://")
+    {
+        get_certificate_expiry_from_url(source).await
+    } else {
+        get_certificate_expiry_from_file(source).await
+    };
+
+    match expiry_result {
         Ok(expiry_date) => {
             let now = Utc::now();
             let days_until_expiry = (expiry_date - now).num_days();
@@ -158,7 +179,7 @@ async fn check_certificate(url: &str, warn_threshold_days: u32) -> CertificateSt
     cert_status
 }
 
-async fn get_certificate_expiry(url: &str) -> Result<DateTime<Utc>> {
+async fn get_certificate_expiry_from_url(url: &str) -> Result<DateTime<Utc>> {
     // Create a client with TLS info enabled, and allow invalid certificates
     let client = reqwest::Client::builder()
         .tls_info(true)
@@ -187,6 +208,50 @@ async fn get_certificate_expiry(url: &str) -> Result<DateTime<Utc>> {
     use x509_parser::prelude::*;
     let (_, cert) =
         X509Certificate::from_der(cert_der).context("failed to parse certificate")?;
+
+    let validity = cert.validity();
+    let not_after = validity.not_after;
+
+    // Convert ASN.1 time to DateTime<Utc>
+    let expiry = DateTime::<Utc>::from_timestamp(not_after.timestamp(), 0)
+        .ok_or_else(|| anyhow!("invalid certificate expiry date"))?;
+
+    Ok(expiry)
+}
+
+async fn get_certificate_expiry_from_file(file_path: &str) -> Result<DateTime<Utc>> {
+    use std::{fs::File, io::Read};
+    use x509_parser::prelude::*;
+
+    // Read the certificate file
+    let mut file = File::open(file_path)
+        .with_context(|| format!("failed to open certificate file: {}", file_path))?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)
+        .with_context(|| format!("failed to read certificate file: {}", file_path))?;
+
+    // Try to parse as PEM first
+    let cert_der = if contents.starts_with(b"-----BEGIN CERTIFICATE-----") {
+        // It's a PEM file
+        let pem = pem_parse(&contents)
+            .map_err(|e| anyhow!("failed to parse PEM certificate: {}", e))?;
+
+        if pem.tag() != "CERTIFICATE" {
+            return Err(anyhow!(
+                "PEM file is not a certificate (found tag: {})",
+                pem.tag()
+            ));
+        }
+
+        pem.into_contents()
+    } else {
+        // Assume it's already DER format
+        contents
+    };
+
+    // Parse the certificate
+    let (_, cert) =
+        X509Certificate::from_der(&cert_der).context("failed to parse certificate")?;
 
     let validity = cert.validity();
     let not_after = validity.not_after;
@@ -234,28 +299,28 @@ fn format_status_lines(
         match cert.state {
             CertificateState::Valid => {
                 if let Some(days) = cert.days_until_expiry {
-                    lines.push(format!("✅ {}: {} days until expiry", cert.url, days));
+                    lines.push(format!("✅ {}: {} days until expiry", cert.source, days));
                 } else {
-                    lines.push(format!("✅ {}: Valid", cert.url));
+                    lines.push(format!("✅ {}: Valid", cert.source));
                 }
             }
             CertificateState::Warning => {
                 if let Some(days) = cert.days_until_expiry {
-                    lines.push(format!("⚠️ {}: {} days until expiry", cert.url, days));
+                    lines.push(format!("⚠️ {}: {} days until expiry", cert.source, days));
                 } else {
-                    lines.push(format!("⚠️ {}: Expiring soon", cert.url));
+                    lines.push(format!("⚠️ {}: Expiring soon", cert.source));
                 }
             }
             CertificateState::Expired => {
                 if let Some(days) = cert.days_until_expiry {
-                    lines.push(format!("❌ {}: Expired {} days ago", cert.url, -days));
+                    lines.push(format!("❌ {}: Expired {} days ago", cert.source, -days));
                 } else {
-                    lines.push(format!("❌ {}: Expired", cert.url));
+                    lines.push(format!("❌ {}: Expired", cert.source));
                 }
             }
             CertificateState::Error => {
                 let error_msg = cert.error.as_deref().unwrap_or("Unknown error");
-                lines.push(format!("🚨 {}: Error - {}", cert.url, error_msg));
+                lines.push(format!("🚨 {}: Error - {}", cert.source, error_msg));
             }
         }
     }

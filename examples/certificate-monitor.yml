@@ -3,4 +3,7 @@ urls:
   - "https://github.com"
   - "https://expired.badssl.com"
 
+# files:
+#   - "./var/license.crt"
+
 warn_threshold_days: 30
