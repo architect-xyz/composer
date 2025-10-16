@@ -35,10 +35,26 @@ services:
       - ./.env:${PWD}/.env:ro
 ```
 
-The scheduler uses container labels to determine when to run or restart them.  For example, the following labels configure the `foo` service to restart every day at 10:00.
+The scheduler uses container labels to determine when to run or restart them.  For example, the following configures the `foo` service to restart every day at 10:00.
 
 ```
-TODO
+foo:
+    container_name: foo_container
+    command: >-
+        /app/foo.sh
+    labels:
+        - "co.architect.composer.restart=0 0 10 * * *"
+```
+
+and the following configures the `foo` service to run every day at 10:00.
+
+```
+foo:
+    container_name: foo_container
+    command: >-
+        /app/foo.sh
+    labels:
+        - "co.architect.composer.run=0 0 10 * * *"
 ```
 
 ## Host system monitoring from inside Docker
