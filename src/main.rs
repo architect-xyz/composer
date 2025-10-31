@@ -12,6 +12,7 @@ mod certificate_monitor;
 mod compose;
 mod compose_types;
 mod container_monitor;
+mod install_commands;
 mod scheduler;
 mod show_status;
 mod system_monitor;
@@ -82,6 +83,9 @@ enum Commands {
     },
     /// Show status of all services: profile, service name, type (service/job), and UP/DOWN status
     Status,
+    /// Install additional components
+    #[command(subcommand)]
+    Install(install_commands::InstallCommands),
 }
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
@@ -122,6 +126,7 @@ async fn main() -> Result<()> {
                 };
                 show_status::show_status(&context).await
             }
+            Commands::Install(command) => install_commands::install(command),
         };
     }
     let project_directory = args.project_directory.clone();
