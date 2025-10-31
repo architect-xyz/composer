@@ -90,7 +90,11 @@ upgrade() {
 
 status() {
     if [ -z "$1" ]; then
-        /usr/bin/docker run --rm -it afintech/composer:latest status
+        /usr/bin/docker run --rm -it \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            -v ./compose.yml:/compose.yml:ro \
+            -v ./.env:/.env:ro \
+            afintech/composer:latest status
     else
         /usr/bin/docker compose ps "$1"
     fi
