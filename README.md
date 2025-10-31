@@ -57,6 +57,12 @@ foo:
         - "co.architect.composer.run=0 0 10 * * *"
 ```
 
+### Installing aliases
+
+```
+docker run --rm -it afintech/composer:latest install bash
+```
+
 ## Automatic Docker image pruning
 
 Composer can automatically prune unused Docker images on a schedule to free up disk space. This runs the `docker image prune -f` command at the specified interval.
