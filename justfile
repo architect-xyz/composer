@@ -1,6 +1,9 @@
 # Default command: run both format and lint
 default:
-    @just --list 
+    @just --list
+
+build:
+    ./build.sh
 
 # Format code using rustfmt
 format:

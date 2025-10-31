@@ -31,6 +31,8 @@ services:
 
   composer:
     image: "afintech/composer:latest"
+    ports:
+      - 127.0.0.1:10080:10080
     environment:
       # recommended to set log level to debug
       - RUST_LOG=composer=debug
