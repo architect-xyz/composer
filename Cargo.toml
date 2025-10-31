@@ -20,7 +20,7 @@ humantime = "2.1.0"
 log = "0.4"
 metrics = "0.24.2"
 metrics-exporter-opentelemetry = "0.1.2"
-opentelemetry = "*"
+opentelemetry = "0.30.0"
 opentelemetry-otlp = { version = "0.30.0", features = [
     "http-proto",
     "trace",
