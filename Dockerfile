@@ -6,4 +6,5 @@ RUN cargo build --release
 
 FROM docker:27-cli 
 COPY --from=builder /composer/target/release/composer /usr/local/bin/composer
-CMD ["composer", "--env-file", "/.env"]
+ENTRYPOINT ["composer"]
+CMD ["--env-file", "/.env"]
