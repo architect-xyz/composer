@@ -104,5 +104,8 @@ When modifying the scheduler:
 - Use `tokio::process::Command` for spawning Docker commands
 - Jobs run in separate async tasks via `JoinSet`
 - Log output using the `log` crate with appropriate levels
+- Always import log macros like `log::error`, and use them in code without qualification like `error!(...)`
+- Always use `anyhow!` and `bail!` without qualification, importing them at the top of the file
+- When printing errors, always use the debug output e.g. `{e:?}` for the full backtrace
 - Handle both file-based and console logging paths
 - Parse cron expressions using the `cron` crate's `Schedule` type

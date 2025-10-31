@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
 use serde_json::json;
-use std::{fs::File, path::PathBuf};
+use std::{fs::File, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 
 mod certificate_monitor;
@@ -14,7 +14,9 @@ mod compose_types;
 mod container_monitor;
 mod install_commands;
 mod scheduler;
-mod show_status;
+mod status;
+mod status_command;
+mod status_server;
 mod system_monitor;
 
 /// Scheduler for docker-compose services
@@ -45,6 +47,10 @@ struct Cli {
     /// You may also set this via env var HOST.
     #[clap(long, env = "HOST")]
     hostname: Option<String>,
+    /// Port to run the status server on.  Defaults to 10080.
+    /// You may also set this via env var STATUS_PORT.
+    #[clap(long, env = "STATUS_PORT", default_value = "10080")]
+    status_port: u16,
     /// If set, run the system monitor (CPU, memory, disk alerting) using
     /// the specified config file.  Or, set to "true" or "1" to use the
     /// default system monitor config.
@@ -124,7 +130,7 @@ async fn main() -> Result<()> {
                     project_directory: args.project_directory.clone(),
                     hostname,
                 };
-                show_status::show_status(&context).await
+                status_command::show_status(&context).await
             }
             Commands::Install(command) => install_commands::install(command),
         };
@@ -299,6 +305,16 @@ async fn main() -> Result<()> {
             slack_webhook_url.clone(),
             slack_webhook_on_error_url.clone(),
         ));
+    }
+    // add status server task
+    {
+        let context = Arc::new(context.clone());
+        let status_port = args.status_port;
+        scheduler.spawn(async move {
+            if let Err(e) = status_server::run_status_server(context, status_port).await {
+                error!("error running status server: {e:?}");
+            }
+        });
     }
     scheduler.join_all().await;
     Ok(())

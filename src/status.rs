@@ -1,15 +1,16 @@
 use crate::compose::{compose_command, load_compose_config, ComposeContext};
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use prettytable_rs::{color, format, row, Attr, Cell, Row, Table};
 use std::{collections::BTreeMap, process::Stdio};
+use term::terminfo::{TermInfo, TerminfoTerminal};
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
 
 #[derive(Debug)]
-struct ServiceInfo {
-    profile: String,
-    name: String,
-    service_type: String, // "job" or "service"
+pub struct ServiceInfo {
+    pub profile: String,
+    pub name: String,
+    pub service_type: String, // "job" or "service"
 }
 
 #[derive(serde::Deserialize)]
@@ -20,7 +21,9 @@ struct DockerComposePsJson {
     state: String,
 }
 
-pub async fn show_status(context: &ComposeContext) -> Result<()> {
+pub async fn gather_status_data(
+    context: &ComposeContext,
+) -> Result<(Vec<ServiceInfo>, BTreeMap<String, String>)> {
     // Load compose config with all profiles
     let compose = load_compose_config(context, Some("*")).await?;
 
@@ -83,10 +86,15 @@ pub async fn show_status(context: &ComposeContext) -> Result<()> {
         }
     }
 
-    // Build and print table
+    Ok((services_info, status_map))
+}
+
+pub fn format_status_table(
+    services_info: &[ServiceInfo],
+    status_map: &BTreeMap<String, String>,
+) -> Result<String> {
     if services_info.is_empty() {
-        println!("No services found in compose file.");
-        return Ok(());
+        return Ok("No services found in compose file.\n".to_string());
     }
 
     let mut table = Table::new();
@@ -113,7 +121,7 @@ pub async fn show_status(context: &ComposeContext) -> Result<()> {
 
     table.set_titles(row!["Profile", "Name", "Type", "Status"]);
 
-    for info in &services_info {
+    for info in services_info {
         let raw_state = status_map.get(&info.name).map(|s| s.as_str());
 
         // For jobs: only show RUNNING, otherwise show nothing
@@ -143,7 +151,23 @@ pub async fn show_status(context: &ComposeContext) -> Result<()> {
         ]));
     }
 
-    table.printstd();
+    // Convert table to string with ANSI colors preserved
+    // Use TerminfoTerminal to wrap our buffer so print_term will emit ANSI codes
+    // If terminfo is not available (non-TTY context), fall back to fake ANSI terminfo
+    let mut buffer = Vec::new();
 
-    Ok(())
+    // Try to get terminfo from environment first, otherwise use fake ANSI terminfo
+    // "xterm" is in the ANSI fallback list, so from_name will always create a basic ANSI terminfo
+    // with escape sequences like \x1B[3%p1%dm for colors
+    let terminfo =
+        TermInfo::from_env().or_else(|_| TermInfo::from_name("xterm")).map_err(|e| {
+            anyhow!("failed to create terminfo (tried env and xterm fallback): {e:?}")
+        })?;
+
+    let mut terminal = TerminfoTerminal::new_with_terminfo(&mut buffer, terminfo);
+    table.print_term(&mut terminal)?;
+    drop(terminal); // Ensure terminal is dropped before converting buffer to string
+
+    let out = String::from_utf8_lossy(&buffer).to_string();
+    Ok(out)
 }
