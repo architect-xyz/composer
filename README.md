@@ -60,7 +60,7 @@ foo:
 ### Installing aliases
 
 ```
-docker run --rm -it afintech/composer:latest install bash
+docker run --rm -it -v $HOME:/home -e HOME="/home" --user $(id -u):$(id -g) afintech/composer:latest install bash
 ```
 
 ## Automatic Docker image pruning
