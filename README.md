@@ -57,6 +57,30 @@ foo:
         - "co.architect.composer.run=0 0 10 * * *"
 ```
 
+## Automatic Docker image pruning
+
+Composer can automatically prune unused Docker images on a schedule to free up disk space. This runs the `docker image prune -f` command at the specified interval.
+
+To enable image pruning, set the `PRUNE_IMAGES` environment variable with a cron expression:
+
+```yaml
+scheduler:
+  image: "afintech/composer:latest"
+  environment:
+    - PRUNE_IMAGES=0 0 2 * * *  # Run at 2:00 AM every day
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    - ./compose.yml:/compose.yml:ro
+```
+
+Alternatively, you can use the `--prune-images` CLI argument:
+
+```bash
+composer --prune-images "0 0 2 * * *" -f compose.yml
+```
+
+Like scheduled services, image pruning supports Slack notifications via the `SLACK_WEBHOOK_URL` and `SLACK_WEBHOOK_ON_ERROR_URL` environment variables.
+
 ## Host system monitoring from inside Docker
 
 Composer can also monitor and alert on host system metrics (CPU, memory, disk).  To do this, the container must have privileged access to the host.  Use the following service config to ensure the correct access:
