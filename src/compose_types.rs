@@ -11,4 +11,5 @@ pub struct Compose {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Service {
     pub labels: Option<BTreeMap<String, String>>,
+    pub profiles: Option<Vec<String>>,
 }

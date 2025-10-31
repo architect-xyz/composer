@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
 use serde_json::json;
-use std::{env::VarError, fs::File, path::PathBuf};
+use std::{fs::File, path::PathBuf};
 use tokio::task::JoinSet;
 
 mod certificate_monitor;
@@ -13,6 +13,7 @@ mod compose;
 mod compose_types;
 mod container_monitor;
 mod scheduler;
+mod show_status;
 mod system_monitor;
 
 /// Scheduler for docker-compose services
@@ -33,15 +34,15 @@ struct Cli {
     #[clap(long)]
     env_file: Option<PathBuf>,
     /// Specify the --project-directory option for docker compose commands.
-    #[clap(long)]
+    #[clap(long, env = "COMPOSE_PROJECT_DIRECTORY")]
     project_directory: Option<String>,
     /// Put stdout/stderr from job runs to this directory instead of
     /// logging them to console.
-    #[clap(long)]
+    #[clap(long, env = "COMPOSE_RUN_LOGS")]
     run_logs: Option<PathBuf>,
     /// Optional hostname to identify the host.
     /// You may also set this via env var HOST.
-    #[clap(long)]
+    #[clap(long, env = "HOST")]
     hostname: Option<String>,
     /// If set, run the system monitor (CPU, memory, disk alerting) using
     /// the specified config file.  Or, set to "true" or "1" to use the
@@ -57,16 +58,16 @@ struct Cli {
     #[clap(long, env = "CERTIFICATE_MONITOR")]
     certificate_monitor: Option<String>,
     /// Run `docker image prune -f` on the provided schedule.
-    #[clap(long)]
+    #[clap(long, env = "PRUNE_IMAGES")]
     prune_images: Option<String>,
     /// Slack webhook URL for notifications.
     /// You may also set this via env var SLACK_WEBHOOK_URL.
     ///
     /// If set, jobs can opt in to slack notifications with the label
     /// co.architect.composer.notify.slack=true
-    #[clap(long)]
+    #[clap(long, env = "SLACK_WEBHOOK_URL")]
     slack_webhook_url: Option<String>,
-    #[clap(long)]
+    #[clap(long, env = "SLACK_WEBHOOK_ON_ERROR_URL")]
     slack_webhook_on_error_url: Option<String>,
 }
 
@@ -79,6 +80,8 @@ enum Commands {
         #[clap(short = 'c', long)]
         config: Option<String>,
     },
+    /// Show status of all services: profile, service name, type (service/job), and UP/DOWN status
+    Status,
 }
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
@@ -88,14 +91,12 @@ const RESTART_KEYS: [&str; 1] = ["co.architect.composer.restart"];
 async fn main() -> Result<()> {
     env_logger::init();
     let args = Cli::parse();
-    let hostname = match args.hostname {
-        Some(hostname) => hostname,
-        None => match std::env::var("HOST") {
-            Ok(hostname) => hostname,
-            Err(VarError::NotPresent) => hostname::get()?.to_string_lossy().to_string(),
-            Err(_) => bail!("HOST was specified but not utf-8"),
-        },
-    };
+    let hostname = args.hostname.unwrap_or_else(|| {
+        hostname::get()
+            .expect("failed to get system hostname")
+            .to_string_lossy()
+            .to_string()
+    });
 
     // Handle subcommands
     if let Some(command) = args.command {
@@ -112,24 +113,19 @@ async fn main() -> Result<()> {
                     bail!("No certificate monitor configuration provided. Use --config, --certificate-monitor, or CERTIFICATE_MONITOR env var");
                 }
             }
+            Commands::Status => {
+                let context = ComposeContext {
+                    compose_file: args.compose_file.to_owned(),
+                    env_file: args.env_file.map(|f| f.to_owned()),
+                    project_directory: args.project_directory.clone(),
+                    hostname,
+                };
+                show_status::show_status(&context).await
+            }
         };
     }
-    let project_directory = match args.project_directory {
-        Some(pwd) => Some(pwd.to_owned()),
-        None => match std::env::var("COMPOSE_PROJECT_DIRECTORY") {
-            Ok(pwd) => Some(pwd.to_owned()),
-            Err(VarError::NotPresent) => None,
-            Err(_) => bail!("COMPOSE_PROJECT_DIRECTORY was specified but not utf-8"),
-        },
-    };
-    let run_logs = match args.run_logs {
-        Some(run_logs) => Some(run_logs.to_owned()),
-        None => match std::env::var("COMPOSE_RUN_LOGS") {
-            Ok(run_logs) => Some(run_logs.into()),
-            Err(VarError::NotPresent) => None,
-            Err(_) => bail!("COMPOSE_RUN_LOGS was specified but not utf-8"),
-        },
-    };
+    let project_directory = args.project_directory.clone();
+    let run_logs = args.run_logs.clone();
     if let Some(run_logs) = run_logs.as_ref() {
         if !run_logs.try_exists()? {
             info!("creating run logs directory: {}", run_logs.display());
@@ -147,30 +143,14 @@ async fn main() -> Result<()> {
             Some(url)
         }
     };
-    let slack_webhook_url = match args.slack_webhook_url {
-        Some(url) => Some(url),
-        None => match std::env::var("SLACK_WEBHOOK_URL") {
-            Ok(url) => sanitize_url(url),
-            Err(VarError::NotPresent) => None,
-            Err(_) => bail!("SLACK_WEBHOOK_URL was specified but not utf-8"),
-        },
-    };
-    let slack_webhook_on_error_url = match args.slack_webhook_on_error_url {
-        Some(url) => Some(url),
-        None => match std::env::var("SLACK_WEBHOOK_ON_ERROR_URL") {
-            Ok(url) => sanitize_url(url),
-            Err(VarError::NotPresent) => None,
-            Err(_) => bail!("SLACK_WEBHOOK_ON_ERROR_URL was specified but not utf-8"),
-        },
-    };
-    let prune_images = match args.prune_images {
-        Some(prune_images) => Some(prune_images),
-        None => match std::env::var("PRUNE_IMAGES") {
-            Ok(prune_images) => Some(prune_images),
-            Err(VarError::NotPresent) => None,
-            Err(_) => bail!("PRUNE_IMAGES was specified but not utf-8"),
-        },
-    };
+    let slack_webhook_url =
+        args.slack_webhook_url.as_ref().map(|s| s.clone()).and_then(sanitize_url);
+    let slack_webhook_on_error_url = args
+        .slack_webhook_on_error_url
+        .as_ref()
+        .map(|s| s.clone())
+        .and_then(sanitize_url);
+    let prune_images = args.prune_images.clone();
     let context = ComposeContext {
         compose_file: args.compose_file.to_owned(),
         env_file: args.env_file.map(|f| f.to_owned()),
