@@ -29,6 +29,9 @@ opentelemetry-otlp = { version = "0.30.0", features = [
     "internal-logs",
 ] }
 pem = "3"
+prettytable-rs = { package = "prettytable-rs", version = "0.10", features = [
+    "win_crlf",
+] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
