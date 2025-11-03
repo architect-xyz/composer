@@ -128,13 +128,13 @@ pub fn format_status_table(
     for info in services_info {
         let raw_state = status_map.get(&info.name).map(|s| s.as_str());
 
-        // For jobs: only show RUNNING, otherwise show nothing
+        // For jobs: show JOB_RUNNING when running, JOB when finished
         // For services: show UP/DOWN as before
         let status_cell = if info.service_type == "job" {
             if raw_state == Some("running") {
-                Cell::new("RUNNING").with_style(Attr::ForegroundColor(color::GREEN))
+                Cell::new("JOB_RUNNING").with_style(Attr::ForegroundColor(color::GREEN))
             } else {
-                Cell::new("FINISHED")
+                Cell::new("JOB")
             }
         } else {
             // Service: use UP/DOWN
