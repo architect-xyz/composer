@@ -64,6 +64,10 @@ pub async fn gather_status_data(
         }
     }
 
+    // Sort by profile, then by name
+    services_info
+        .sort_by(|a, b| a.profile.cmp(&b.profile).then_with(|| a.name.cmp(&b.name)));
+
     // Query docker compose ps to get status
     let mut cmd = compose_command(context, None::<&str>);
     cmd.arg("ps")
