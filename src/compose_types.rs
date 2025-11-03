@@ -8,7 +8,7 @@ pub struct Compose {
     pub services: BTreeMap<String, Option<Service>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Service {
     pub labels: Option<BTreeMap<String, String>>,
     pub profiles: Option<Vec<String>>,
