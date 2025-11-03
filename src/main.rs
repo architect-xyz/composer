@@ -306,7 +306,7 @@ fn watch_compose_file(
     changed_tx: tokio::sync::mpsc::Sender<()>,
 ) -> Result<()> {
     use notify::{Config, EventKind, PollWatcher, RecursiveMode, Watcher};
-    use std::path::Path;
+    use std::{path::Path, time::Duration};
 
     let (tx, rx) = std::sync::mpsc::channel();
     // NB: only the PollWatcher is reliable w.r.t. Docker volume mounts cross-platform
@@ -315,7 +315,7 @@ fn watch_compose_file(
             debug!("compose file event: {res:?}");
             tx.send(res).unwrap();
         },
-        Config::default(),
+        Config::default().with_poll_interval(Duration::from_secs(1)),
     )?;
 
     let mut file_contents = std::fs::read_to_string(&compose_file)?;
@@ -343,6 +343,11 @@ fn watch_compose_file(
             // check if the file contents have actually changed;
             // for file deletion, the read will fail and we
             // will assume that the file has changed.
+            //
+            // the reason not to use notify's compare_contents
+            // feature is that we are watching the parent directory
+            // and only need to compare contents on this particular
+            // file, so we do it manually behind this filter.
             match std::fs::read_to_string(&compose_file) {
                 Ok(new_file_contents) => {
                     if new_file_contents != file_contents {

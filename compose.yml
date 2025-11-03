@@ -11,7 +11,7 @@ services:
       - ./say_hello.sh:/say_hello.sh
     labels:
       # run this service every thirty seconds
-      - "co.architect.composer.run=*/30 * * * * *"
+      - "co.architect.composer.run=*/16 * * * * *"
       - "co.architect.composer.notify.slack=true"
       - "co.architect.composer.notify.slack.on-error=true"
 
