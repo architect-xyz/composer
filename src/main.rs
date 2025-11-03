@@ -51,6 +51,9 @@ struct Cli {
     /// You may also set this via env var STATUS_PORT.
     #[clap(long, env = "STATUS_PORT", default_value = "10080")]
     status_port: u16,
+    /// If set to "true" or "1", run the container monitor
+    #[clap(long, env = "CONTAINER_MONITOR")]
+    container_monitor: Option<String>,
     /// If set, run the system monitor (CPU, memory, disk alerting) using
     /// the specified config file.  Or, set to "true" or "1" to use the
     /// default system monitor config.
@@ -228,7 +231,7 @@ async fn main() -> Result<()> {
         }
     }
     // add container monitor task
-    {
+    if args.container_monitor.is_some_and(|v| v == "true" || v == "1") {
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
         let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
