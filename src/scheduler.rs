@@ -5,6 +5,7 @@ use cron::Schedule;
 use log::{error, info, warn};
 use serde_json::json;
 use std::process::Stdio;
+use tokio_util::sync::CancellationToken;
 
 pub async fn run_command_on_schedule(
     context: ComposeContext,
@@ -14,8 +15,12 @@ pub async fn run_command_on_schedule(
     args: &[&str],
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
+    cancellation_token: CancellationToken,
 ) {
     loop {
+        if cancellation_token.is_cancelled() {
+            return;
+        }
         let up = match schedule.upcoming(Utc).next() {
             Some(up) => up,
             None => {
@@ -25,7 +30,17 @@ pub async fn run_command_on_schedule(
         };
         let duration_from_now = (up - Utc::now()).to_std().unwrap();
         info!("next {action} in {}", humantime::format_duration(duration_from_now));
-        tokio::time::sleep(duration_from_now).await;
+        
+        // Sleep in chunks to check for cancellation
+        let sleep_duration = duration_from_now.min(std::time::Duration::from_secs(1));
+        let mut remaining = duration_from_now;
+        while remaining > std::time::Duration::ZERO {
+            if cancellation_token.is_cancelled() {
+                return;
+            }
+            tokio::time::sleep(sleep_duration.min(remaining)).await;
+            remaining = remaining.saturating_sub(sleep_duration);
+        }
         let now = Utc::now();
         if (now - up).abs() > chrono::Duration::seconds(1) {
             error!("time skew for scheduled {action}: expected {up}, is {now}");

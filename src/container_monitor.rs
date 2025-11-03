@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::{collections::BTreeMap, process::Stdio, time::Duration};
 use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Deserialize)]
 struct DockerComposePsJson {
@@ -26,13 +27,20 @@ pub async fn run(
     services: Vec<String>,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
+    cancellation_token: CancellationToken,
 ) -> Result<()> {
     let mut status_board: BTreeMap<String, ServiceStatus> = BTreeMap::new();
     let mut check_interval = tokio::time::interval(Duration::from_secs(60));
     check_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut should_notify = true;
     loop {
+        if cancellation_token.is_cancelled() {
+            return Ok(());
+        }
         check_interval.tick().await;
+        if cancellation_token.is_cancelled() {
+            return Ok(());
+        }
         let now = Utc::now();
         let mut cmd = tokio::process::Command::new("docker");
         cmd.arg("compose").arg("-f").arg(context.compose_file.as_os_str());

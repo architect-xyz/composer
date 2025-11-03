@@ -7,6 +7,7 @@ use log::{debug, error, info, warn};
 use serde_json::json;
 use std::{fs::File, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 
 mod certificate_monitor;
 mod compose;
@@ -171,10 +172,81 @@ async fn main() -> Result<()> {
         project_directory,
         hostname,
     };
+
+    // Implement file watching and reload loop
+    let compose_file = context.compose_file.clone();
+    loop {
+        let cancellation_token = CancellationToken::new();
+        let token_for_watcher = cancellation_token.clone();
+
+        // Spawn file watcher task
+        let file_watcher_handle = {
+            let compose_file = compose_file.clone();
+            tokio::spawn(async move {
+                if let Err(e) = watch_compose_file(compose_file, token_for_watcher).await
+                {
+                    warn!(
+                        "file watcher error (will continue without auto-reload): {e:?}"
+                    );
+                }
+            })
+        };
+
+        // Run scheduler setup - this will return when cancelled
+        let run_result = run(
+            context.clone(),
+            &args,
+            run_logs.clone(),
+            slack_webhook_url.clone(),
+            slack_webhook_on_error_url.clone(),
+            prune_images.clone(),
+            cancellation_token.clone(),
+        )
+        .await;
+
+        // Abort file watcher
+        file_watcher_handle.abort();
+
+        match run_result {
+            Ok(()) => {
+                // If run() completed successfully without cancellation, that's an error
+                // (it should only return when cancelled or on error)
+                error!("scheduler setup completed unexpectedly");
+                return Err(anyhow!("scheduler setup completed unexpectedly"));
+            }
+            Err(e) => {
+                // Check if this was due to cancellation
+                if cancellation_token.is_cancelled() {
+                    info!("compose file changed, reloading...");
+                    // Wait a moment before restarting
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    // Loop will restart run()
+                    continue;
+                } else {
+                    // Real error, propagate it
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+async fn run(
+    context: ComposeContext,
+    args: &Cli,
+    run_logs: Option<PathBuf>,
+    slack_webhook_url: Option<String>,
+    slack_webhook_on_error_url: Option<String>,
+    prune_images: Option<String>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
     let compose = load_compose_config(&context, Some("*")).await?;
     let mut scheduler = JoinSet::new();
     let mut monitor_containers = vec![];
     for (name, service) in &compose.services {
+        if cancellation_token.is_cancelled() {
+            return Ok(());
+        }
         debug!("parsing service: {name}");
         let mut should_monitor = true;
         if let Some(service) = service.as_ref() {
@@ -210,6 +282,7 @@ async fn main() -> Result<()> {
                             format!("while parsing cron expression: {value}")
                         })?;
                         info!("service {name} has a {action} schedule: {schedule}");
+                        let token = cancellation_token.clone();
                         scheduler.spawn(run_on_schedule(
                             context.clone(),
                             action,
@@ -218,11 +291,9 @@ async fn main() -> Result<()> {
                             run_logs.clone(),
                             maybe_slack_webhook_url.clone(),
                             maybe_slack_webhook_on_error_url.clone(),
+                            token,
                         ));
                     }
-                    // for up in schedule.upcoming(Utc).take(3) {
-                    //     println!("  -> {}", up);
-                    // }
                 }
             }
         }
@@ -235,12 +306,14 @@ async fn main() -> Result<()> {
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
         let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        let token = cancellation_token.clone();
         scheduler.spawn(async move {
             if let Err(e) = container_monitor::run(
                 context.clone(),
                 monitor_containers,
                 slack_webhook_url.clone(),
                 slack_webhook_on_error_url.clone(),
+                token,
             )
             .await
             {
@@ -249,7 +322,7 @@ async fn main() -> Result<()> {
         });
     }
     // add system monitor task
-    if let Some(config_file) = args.system_monitor {
+    if let Some(config_file) = &args.system_monitor {
         let config: system_monitor::SystemMonitorConfig =
             if config_file.to_lowercase() == "true" || config_file == "1" {
                 serde_yaml::from_str("{}")?
@@ -260,12 +333,14 @@ async fn main() -> Result<()> {
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
         let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        let token = cancellation_token.clone();
         scheduler.spawn(async move {
             if let Err(e) = system_monitor::run(
                 context.hostname,
                 config,
                 slack_webhook_url,
                 slack_webhook_on_error_url,
+                token,
             )
             .await
             {
@@ -274,19 +349,21 @@ async fn main() -> Result<()> {
         });
     }
     // add certificate monitor task
-    if let Some(config_file) = args.certificate_monitor {
+    if let Some(config_file) = &args.certificate_monitor {
         let config_s = std::fs::read_to_string(config_file)?;
         let config: certificate_monitor::CertificateMonitorConfig =
             serde_yaml::from_str(&config_s)?;
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
         let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        let token = cancellation_token.clone();
         scheduler.spawn(async move {
             if let Err(e) = certificate_monitor::run(
                 context.hostname,
                 config,
                 slack_webhook_url,
                 slack_webhook_on_error_url,
+                token,
             )
             .await
             {
@@ -299,6 +376,7 @@ async fn main() -> Result<()> {
         let schedule: Schedule = prune_images
             .parse()
             .with_context(|| format!("while parsing cron expression: {prune_images}"))?;
+        let token = cancellation_token.clone();
         scheduler.spawn(scheduler::run_command_on_schedule(
             context.clone(),
             schedule,
@@ -307,20 +385,97 @@ async fn main() -> Result<()> {
             &["image", "prune", "-f"],
             slack_webhook_url.clone(),
             slack_webhook_on_error_url.clone(),
+            token,
         ));
     }
     // add status server task
     {
         let context = Arc::new(context.clone());
         let status_port = args.status_port;
+        let token = cancellation_token.clone();
         scheduler.spawn(async move {
-            if let Err(e) = status_server::run_status_server(context, status_port).await {
+            if let Err(e) =
+                status_server::run_status_server(context, status_port, token).await
+            {
                 error!("error running status server: {e:?}");
             }
         });
     }
     scheduler.join_all().await;
+
+    // Check if we were cancelled
+    if cancellation_token.is_cancelled() {
+        return Ok(());
+    }
+
     Ok(())
+}
+
+async fn watch_compose_file(
+    compose_file: PathBuf,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::{sync::mpsc, time::Duration};
+
+    let (tx, rx) = mpsc::channel();
+    let mut watcher: RecommendedWatcher = Watcher::new_immediate(move |result| {
+        if let Ok(event) = result {
+            if let Err(e) = tx.send(event) {
+                error!("failed to send file event: {e}");
+            }
+        } else if let Err(e) = result {
+            error!("file watcher error: {e}");
+        }
+    })?;
+
+    // Watch the directory containing the compose file, not the file itself
+    // (watching the file directly might not work if it gets replaced)
+    let watch_path = compose_file.parent().unwrap_or_else(|| std::path::Path::new("."));
+    watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
+    info!("watching compose file: {}", compose_file.display());
+
+    let mut last_event_time: Option<std::time::Instant> = None;
+    let debounce_duration = Duration::from_millis(500);
+
+    loop {
+        if cancellation_token.is_cancelled() {
+            return Ok(());
+        }
+
+        // Check for events with timeout
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(event) => {
+                // Check if this event is for our compose file
+                if event.paths.iter().any(|path| path == &compose_file) {
+                    // Only trigger on modify/create/remove events
+                    match event.kind {
+                        EventKind::Modify(_)
+                        | EventKind::Create(_)
+                        | EventKind::Remove(_) => {
+                            last_event_time = Some(std::time::Instant::now());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Check if enough time has passed since last event (debouncing)
+                if let Some(last_time) = last_event_time {
+                    if last_time.elapsed() >= debounce_duration {
+                        // Debounce period passed, trigger reload
+                        info!("compose file changed, triggering reload");
+                        cancellation_token.cancel();
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                error!("file watcher channel error: {e}");
+                return Err(anyhow!("file watcher channel error: {e}"));
+            }
+        }
+    }
 }
 
 async fn run_on_schedule(
@@ -331,8 +486,12 @@ async fn run_on_schedule(
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
+    cancellation_token: CancellationToken,
 ) {
     loop {
+        if cancellation_token.is_cancelled() {
+            return;
+        }
         let up = match schedule.upcoming(Utc).next() {
             Some(up) => up,
             None => {
@@ -345,7 +504,17 @@ async fn run_on_schedule(
             "next {action} for {service} in {}",
             humantime::format_duration(duration_from_now)
         );
-        tokio::time::sleep(duration_from_now).await;
+
+        // Sleep in chunks to check for cancellation
+        let sleep_duration = duration_from_now.min(std::time::Duration::from_secs(1));
+        let mut remaining = duration_from_now;
+        while remaining > std::time::Duration::ZERO {
+            if cancellation_token.is_cancelled() {
+                return;
+            }
+            tokio::time::sleep(sleep_duration.min(remaining)).await;
+            remaining = remaining.saturating_sub(sleep_duration);
+        }
         let now = Utc::now();
         if (now - up).abs() > chrono::Duration::seconds(1) {
             error!("time skew for scheduled {action}: expected {up}, is {now}");
