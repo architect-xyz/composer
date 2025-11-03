@@ -309,6 +309,7 @@ fn watch_compose_file(
     use std::path::Path;
 
     let (tx, rx) = std::sync::mpsc::channel();
+    // NB: only the PollWatcher is reliable w.r.t. Docker volume mounts cross-platform
     let mut watcher = PollWatcher::new(
         move |res| {
             debug!("compose file event: {res:?}");
