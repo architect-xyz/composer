@@ -4,13 +4,8 @@ use axum::{http::StatusCode, response::Response, routing::get, Router};
 use log::{error, info};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 
-pub async fn run_status_server(
-    context: Arc<ComposeContext>,
-    port: u16,
-    cancellation_token: CancellationToken,
-) -> Result<()> {
+pub async fn run_status_server(context: Arc<ComposeContext>, port: u16) -> Result<()> {
     let app = Router::new().route("/status.txt", get(handle_status)).with_state(context);
 
     let addr = format!("0.0.0.0:{port}");
@@ -20,18 +15,7 @@ pub async fn run_status_server(
 
     info!("status server listening on {addr}");
 
-    let server_handle = tokio::spawn(async move { axum::serve(listener, app).await });
-
-    // Wait for cancellation or server error
-    tokio::select! {
-        result = server_handle => {
-            result??;
-        }
-        _ = cancellation_token.cancelled() => {
-            info!("status server cancelled, shutting down");
-            // Server will be dropped when handle is dropped
-        }
-    }
+    axum::serve(listener, app).await.context("status server error")?;
 
     Ok(())
 }

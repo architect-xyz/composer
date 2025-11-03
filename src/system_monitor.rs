@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::BTreeMap, str::FromStr, time::Duration};
 use sysinfo::{Disks, System};
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMonitorConfig {
@@ -76,7 +75,6 @@ pub async fn run(
     config: SystemMonitorConfig,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
-    cancellation_token: CancellationToken,
 ) -> Result<()> {
     // initialize telemetry, if the environment variables are set
     let _recorder = match initialize_telemetry(&host_name) {
@@ -113,13 +111,7 @@ pub async fn run(
     let gauge_disk_total_bytes = gauge!("disk.total_bytes");
 
     loop {
-        if cancellation_token.is_cancelled() {
-            return Ok(());
-        }
         interval.tick().await;
-        if cancellation_token.is_cancelled() {
-            return Ok(());
-        }
         sys.refresh_all();
         last_status = std::mem::take(&mut status);
 

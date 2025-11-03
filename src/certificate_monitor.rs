@@ -5,7 +5,6 @@ use pem::parse as pem_parse;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertificateMonitorConfig {
@@ -103,7 +102,6 @@ pub async fn run(
     config: CertificateMonitorConfig,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
-    cancellation_token: CancellationToken,
 ) -> Result<()> {
     let mut interval = tokio::time::interval(Duration::from_secs(3600)); // Check every hour
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -112,13 +110,7 @@ pub async fn run(
     let mut first_status = true;
 
     loop {
-        if cancellation_token.is_cancelled() {
-            return Ok(());
-        }
         interval.tick().await;
-        if cancellation_token.is_cancelled() {
-            return Ok(());
-        }
         last_status = std::mem::take(&mut status);
 
         // Check all certificates
