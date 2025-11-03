@@ -32,9 +32,9 @@ pub async fn run_status_server(
 }
 
 async fn handle_status(
-    axum::extract::State(compose): axum::extract::State<Arc<StatusServerState>>,
+    axum::extract::State(state): axum::extract::State<Arc<StatusServerState>>,
 ) -> axum::response::Result<Response<String>> {
-    match status::gather_status_data(&compose.context, &compose.compose).await {
+    match status::gather_status_data(&state.context, &state.compose).await {
         Ok((services_info, status_map)) => {
             let formatted = status::format_status_table(&services_info, &status_map)
                 .map_err(|e| {
