@@ -104,7 +104,7 @@ const RESTART_KEYS: [&str; 1] = ["co.architect.composer.restart"];
 async fn main() -> Result<()> {
     env_logger::init();
     let args = Cli::parse();
-    let hostname = args.hostname.clone().unwrap_or_else(|| {
+    let hostname = args.hostname.unwrap_or_else(|| {
         hostname::get()
             .expect("failed to get system hostname")
             .to_string_lossy()
@@ -166,112 +166,15 @@ async fn main() -> Result<()> {
         .and_then(sanitize_url);
     let prune_images = args.prune_images.clone();
     let context = ComposeContext {
-        compose_file: args.compose_file.clone(),
-        env_file: args.env_file.clone(),
+        compose_file: args.compose_file.to_owned(),
+        env_file: args.env_file.map(|f| f.to_owned()),
         project_directory,
         hostname,
     };
-
-    // Implement file watching and reload loop
-    let compose_file = context.compose_file.clone();
-    loop {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
-
-        // Spawn file watcher task
-        let _file_watcher_task = {
-            let compose_file = compose_file.clone();
-            let tx = tx.clone();
-            tokio::task::spawn_blocking(|| {
-                watch_compose_file(compose_file, tx).expect("file watcher task failed")
-            })
-        };
-
-        // Run scheduler setup - this returns the JoinSet
-        let mut scheduler = run(
-            context.clone(),
-            &args,
-            run_logs.clone(),
-            slack_webhook_url.clone(),
-            slack_webhook_on_error_url.clone(),
-            prune_images.clone(),
-        )
-        .await?;
-
-        // Wait for either scheduler completion or file change
-        tokio::select! {
-            result = scheduler.join_next() => {
-                // A task completed (shouldn't happen normally, tasks run forever)
-                if let Some(Ok(())) = result {
-                    // Task completed successfully, continue
-                    continue;
-                } else if let Some(Err(e)) = result {
-                    // Task panicked, propagate error
-                    return Err(anyhow!("scheduler task error: {e:?}"));
-                } else {
-                    // No more tasks (shouldn't happen)
-                    error!("all scheduler tasks completed unexpectedly");
-                    return Err(anyhow!("all scheduler tasks completed unexpectedly"));
-                }
-            }
-            result = rx.recv() => {
-                let () = result.ok_or_else(|| anyhow!("file watcher channel closed"))?;
-                info!("compose file changed, reloading...");
-
-                scheduler.shutdown().await;
-                while scheduler.join_next().await.is_some() {}
-                continue;
-            }
-        }
-    }
-}
-
-fn watch_compose_file(
-    compose_file: PathBuf,
-    changed_tx: tokio::sync::mpsc::Sender<()>,
-) -> Result<()> {
-    use notify::{EventKind, RecursiveMode, Watcher};
-    use std::path::Path;
-
-    let (tx, rx) = std::sync::mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res| {
-        tx.send(res).unwrap();
-    })?;
-
-    // Watch the directory containing the compose file, not the file itself;
-    // watching the file directly might not work if it gets replaced.
-    let watch_path = compose_file.parent().unwrap_or_else(|| Path::new("."));
-    watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
-    info!("watching compose file: {}", compose_file.display());
-
-    loop {
-        let event = rx.recv()??;
-        if matches!(
-            event.kind,
-            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
-        ) && event.paths.iter().any(|path| path == &compose_file)
-        {
-            changed_tx.blocking_send(()).unwrap();
-        }
-    }
-}
-
-async fn run(
-    context: ComposeContext,
-    args: &Cli,
-    run_logs: Option<PathBuf>,
-    slack_webhook_url: Option<String>,
-    slack_webhook_on_error_url: Option<String>,
-    prune_images: Option<String>,
-) -> Result<JoinSet<()>> {
     let compose = load_compose_config(&context, Some("*")).await?;
     let mut scheduler = JoinSet::new();
     let mut monitor_containers = vec![];
-    let services: Vec<(String, Option<crate::compose_types::Service>)> = compose
-        .services
-        .iter()
-        .map(|(name, service)| (name.clone(), (*service).clone()))
-        .collect();
-    for (name, service) in services {
+    for (name, service) in &compose.services {
         debug!("parsing service: {name}");
         let mut should_monitor = true;
         if let Some(service) = service.as_ref() {
@@ -306,28 +209,20 @@ async fn run(
                         let schedule: Schedule = value.parse().with_context(|| {
                             format!("while parsing cron expression: {value}")
                         })?;
-                        let service_name = name.clone();
-                        let run_logs_clone = run_logs.clone();
-                        let context_clone = context.clone();
-                        let slack_webhook_url_clone = maybe_slack_webhook_url.clone();
-                        let slack_webhook_on_error_url_clone =
-                            maybe_slack_webhook_on_error_url.clone();
-                        info!(
-                            "service {service_name} has a {action} schedule: {schedule}"
-                        );
-                        scheduler.spawn(async move {
-                            run_on_schedule(
-                                context_clone,
-                                action,
-                                schedule,
-                                service_name,
-                                run_logs_clone,
-                                slack_webhook_url_clone,
-                                slack_webhook_on_error_url_clone,
-                            )
-                            .await;
-                        });
+                        info!("service {name} has a {action} schedule: {schedule}");
+                        scheduler.spawn(run_on_schedule(
+                            context.clone(),
+                            action,
+                            schedule,
+                            name.clone(),
+                            run_logs.clone(),
+                            maybe_slack_webhook_url.clone(),
+                            maybe_slack_webhook_on_error_url.clone(),
+                        ));
                     }
+                    // for up in schedule.upcoming(Utc).take(3) {
+                    //     println!("  -> {}", up);
+                    // }
                 }
             }
         }
@@ -336,7 +231,7 @@ async fn run(
         }
     }
     // add container monitor task
-    if args.container_monitor.as_ref().is_some_and(|v| v == "true" || v == "1") {
+    if args.container_monitor.is_some_and(|v| v == "true" || v == "1") {
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
         let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
@@ -354,7 +249,7 @@ async fn run(
         });
     }
     // add system monitor task
-    if let Some(config_file) = &args.system_monitor {
+    if let Some(config_file) = args.system_monitor {
         let config: system_monitor::SystemMonitorConfig =
             if config_file.to_lowercase() == "true" || config_file == "1" {
                 serde_yaml::from_str("{}")?
@@ -379,7 +274,7 @@ async fn run(
         });
     }
     // add certificate monitor task
-    if let Some(config_file) = &args.certificate_monitor {
+    if let Some(config_file) = args.certificate_monitor {
         let config_s = std::fs::read_to_string(config_file)?;
         let config: certificate_monitor::CertificateMonitorConfig =
             serde_yaml::from_str(&config_s)?;
@@ -404,21 +299,15 @@ async fn run(
         let schedule: Schedule = prune_images
             .parse()
             .with_context(|| format!("while parsing cron expression: {prune_images}"))?;
-        let context_clone = context.clone();
-        let slack_webhook_url_clone = slack_webhook_url.clone();
-        let slack_webhook_on_error_url_clone = slack_webhook_on_error_url.clone();
-        scheduler.spawn(async move {
-            scheduler::run_command_on_schedule(
-                context_clone,
-                schedule,
-                "prune images",
-                "docker",
-                &["image", "prune", "-f"],
-                slack_webhook_url_clone,
-                slack_webhook_on_error_url_clone,
-            )
-            .await;
-        });
+        scheduler.spawn(scheduler::run_command_on_schedule(
+            context.clone(),
+            schedule,
+            "prune images",
+            "docker",
+            &["image", "prune", "-f"],
+            slack_webhook_url.clone(),
+            slack_webhook_on_error_url.clone(),
+        ));
     }
     // add status server task
     {
@@ -430,7 +319,38 @@ async fn run(
             }
         });
     }
-    Ok(scheduler)
+    scheduler.join_all().await;
+    Ok(())
+}
+
+fn watch_compose_file(
+    compose_file: PathBuf,
+    changed_tx: tokio::sync::mpsc::Sender<()>,
+) -> Result<()> {
+    use notify::{EventKind, RecursiveMode, Watcher};
+    use std::path::Path;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        tx.send(res).unwrap();
+    })?;
+
+    // Watch the directory containing the compose file, not the file itself;
+    // watching the file directly might not work if it gets replaced.
+    let watch_path = compose_file.parent().unwrap_or_else(|| Path::new("."));
+    watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
+    info!("watching compose file: {}", compose_file.display());
+
+    loop {
+        let event = rx.recv()??;
+        if matches!(
+            event.kind,
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+        ) && event.paths.iter().any(|path| path == &compose_file)
+        {
+            changed_tx.blocking_send(()).unwrap();
+        }
+    }
 }
 
 async fn run_on_schedule(
