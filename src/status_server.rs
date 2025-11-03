@@ -5,8 +5,19 @@ use log::{error, info};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
-pub async fn run_status_server(context: Arc<ComposeContext>, port: u16) -> Result<()> {
-    let app = Router::new().route("/status.txt", get(handle_status)).with_state(context);
+struct StatusServerState {
+    context: ComposeContext,
+    compose: crate::compose_types::Compose,
+}
+
+pub async fn run_status_server(
+    context: ComposeContext,
+    compose: crate::compose_types::Compose,
+    port: u16,
+) -> Result<()> {
+    let app = Router::new()
+        .route("/status.txt", get(handle_status))
+        .with_state(Arc::new(StatusServerState { context, compose }));
 
     let addr = format!("0.0.0.0:{port}");
     let listener = TcpListener::bind(&addr)
@@ -21,9 +32,9 @@ pub async fn run_status_server(context: Arc<ComposeContext>, port: u16) -> Resul
 }
 
 async fn handle_status(
-    axum::extract::State(context): axum::extract::State<Arc<ComposeContext>>,
+    axum::extract::State(compose): axum::extract::State<Arc<StatusServerState>>,
 ) -> axum::response::Result<Response<String>> {
-    match status::gather_status_data(&context).await {
+    match status::gather_status_data(&compose.context, &compose.compose).await {
         Ok((services_info, status_map)) => {
             let formatted = status::format_status_table(&services_info, &status_map)
                 .map_err(|e| {
