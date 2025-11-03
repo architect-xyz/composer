@@ -5,11 +5,7 @@ use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
 use serde_json::json;
-use std::{
-    fs::File,
-    path::PathBuf,
-    sync::{mpsc, Arc},
-};
+use std::{fs::File, path::PathBuf, sync::Arc};
 use tokio::task::JoinSet;
 
 mod certificate_monitor;
@@ -182,15 +178,11 @@ async fn main() -> Result<()> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
 
         // Spawn file watcher task
-        let file_watcher_handle = {
+        let _file_watcher_task = {
             let compose_file = compose_file.clone();
             let tx = tx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = watch_compose_file(compose_file, tx).await {
-                    warn!(
-                        "file watcher error (will continue without auto-reload): {e:?}"
-                    );
-                }
+            tokio::task::spawn_blocking(|| {
+                watch_compose_file(compose_file, tx).expect("file watcher task failed")
             })
         };
 
@@ -221,88 +213,44 @@ async fn main() -> Result<()> {
                     return Err(anyhow!("all scheduler tasks completed unexpectedly"));
                 }
             }
-            _ = rx.recv() => {
-                // File changed, abort all tasks and restart
+            result = rx.recv() => {
+                let () = result.ok_or_else(|| anyhow!("file watcher channel closed"))?;
                 info!("compose file changed, reloading...");
 
-                // Abort all tasks in the scheduler by shutting it down
                 scheduler.shutdown().await;
-
-                // Wait for tasks to finish aborting
                 while scheduler.join_next().await.is_some() {}
-
-                // Abort file watcher
-                file_watcher_handle.abort();
-
-                // Wait a moment before restarting
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-                // Loop will restart run()
                 continue;
             }
         }
     }
 }
 
-async fn watch_compose_file(
+fn watch_compose_file(
     compose_file: PathBuf,
-    change_tx: tokio::sync::mpsc::Sender<()>,
+    changed_tx: tokio::sync::mpsc::Sender<()>,
 ) -> Result<()> {
     use notify::{EventKind, RecursiveMode, Watcher};
-    use std::time::Duration;
+    use std::path::Path;
 
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |result| {
-        if let Ok(event) = result {
-            if let Err(e) = tx.send(event) {
-                error!("failed to send file event: {e}");
-            }
-        } else if let Err(e) = result {
-            error!("file watcher error: {e}");
-        }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res| {
+        tx.send(res).unwrap();
     })?;
 
-    // Watch the directory containing the compose file, not the file itself
-    // (watching the file directly might not work if it gets replaced)
-    let watch_path = compose_file.parent().unwrap_or_else(|| std::path::Path::new("."));
+    // Watch the directory containing the compose file, not the file itself;
+    // watching the file directly might not work if it gets replaced.
+    let watch_path = compose_file.parent().unwrap_or_else(|| Path::new("."));
     watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
     info!("watching compose file: {}", compose_file.display());
 
-    let mut last_event_time: Option<std::time::Instant> = None;
-    let debounce_duration = Duration::from_millis(500);
-
     loop {
-        // Check for events with timeout
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(event) => {
-                // Check if this event is for our compose file
-                if event.paths.iter().any(|path| path == &compose_file) {
-                    // Only trigger on modify/create/remove events
-                    match event.kind {
-                        EventKind::Modify(_)
-                        | EventKind::Create(_)
-                        | EventKind::Remove(_) => {
-                            last_event_time = Some(std::time::Instant::now());
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Check if enough time has passed since last event (debouncing)
-                if let Some(last_time) = last_event_time {
-                    if last_time.elapsed() >= debounce_duration {
-                        // Debounce period passed, trigger reload
-                        info!("compose file changed, triggering reload");
-                        let _ = change_tx.send(()).await;
-                        return Ok(());
-                    }
-                }
-            }
-            Err(e) => {
-                error!("file watcher channel error: {e}");
-                return Err(anyhow!("file watcher channel error: {e}"));
-            }
+        let event = rx.recv()??;
+        if matches!(
+            event.kind,
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+        ) && event.paths.iter().any(|path| path == &compose_file)
+        {
+            changed_tx.blocking_send(()).unwrap();
         }
     }
 }
