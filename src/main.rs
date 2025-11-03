@@ -222,6 +222,7 @@ async fn main() -> Result<()> {
             }
         });
     }
+
     // add pruning tasks
     if let Some(prune_images) = prune_images {
         let schedule: Schedule = prune_images
