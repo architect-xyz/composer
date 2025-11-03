@@ -47,6 +47,6 @@ tokio = { version = "1", features = [
     "time",
     "net",
 ] }
-tokio-util = { version = "0.7", features = ["sync"] }
+tokio-util = "0.7"
 url = "2"
 x509-parser = "0.16"
