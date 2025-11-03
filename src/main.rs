@@ -167,8 +167,9 @@ async fn main() -> Result<()> {
     let prune_images = args.prune_images.clone();
     let container_monitor =
         args.container_monitor.is_some_and(|v| v == "true" || v == "1");
+    let compose_file = std::fs::canonicalize(args.compose_file)?;
     let context = ComposeContext {
-        compose_file: args.compose_file.to_owned(),
+        compose_file,
         env_file: args.env_file.map(|f| f.to_owned()),
         project_directory,
         hostname,
@@ -304,21 +305,30 @@ fn watch_compose_file(
     compose_file: PathBuf,
     changed_tx: tokio::sync::mpsc::Sender<()>,
 ) -> Result<()> {
-    use notify::{EventKind, RecursiveMode, Watcher};
+    use notify::{Config, EventKind, PollWatcher, RecursiveMode, Watcher};
+    use std::path::Path;
 
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res| {
-        tx.send(res).unwrap();
-    })?;
+    let mut watcher = PollWatcher::new(
+        move |res| {
+            debug!("compose file event: {res:?}");
+            tx.send(res).unwrap();
+        },
+        Config::default(),
+    )?;
 
     // Watch the directory containing the compose file, not the file itself;
     // watching the file directly might not work if it gets replaced.
     let watch_path = match compose_file.parent() {
         Some(parent) => parent,
-        None => &compose_file,
+        None => Path::new("/"),
     };
     watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
-    info!("watching compose file: {}", compose_file.display());
+    info!(
+        "watching compose file {} via {}",
+        compose_file.display(),
+        watch_path.display()
+    );
 
     loop {
         let event = rx.recv()??;
