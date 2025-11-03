@@ -318,6 +318,8 @@ fn watch_compose_file(
         Config::default(),
     )?;
 
+    let mut file_contents = std::fs::read_to_string(&compose_file)?;
+
     // Watch the directory containing the compose file, not the file itself;
     // watching the file directly might not work if it gets replaced.
     let watch_path = match compose_file.parent() {
@@ -338,7 +340,20 @@ fn watch_compose_file(
             EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
         ) && event.paths.iter().any(|path| path == &compose_file)
         {
-            changed_tx.blocking_send(()).unwrap();
+            // check if the file contents have actually changed;
+            // for file deletion, the read will fail and we
+            // will assume that the file has changed.
+            match std::fs::read_to_string(&compose_file) {
+                Ok(new_file_contents) => {
+                    if new_file_contents != file_contents {
+                        file_contents = new_file_contents;
+                        changed_tx.blocking_send(()).unwrap();
+                    }
+                }
+                Err(_) => {
+                    changed_tx.blocking_send(()).unwrap();
+                }
+            }
         }
     }
 }
