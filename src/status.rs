@@ -1,4 +1,4 @@
-use crate::compose::{compose_command, load_compose_config, ComposeContext};
+use crate::compose::{compose_command, ComposeContext};
 use anyhow::{anyhow, bail, Context, Result};
 use prettytable_rs::{color, format, row, Attr, Cell, Row, Table};
 use std::{collections::BTreeMap, process::Stdio};
@@ -23,10 +23,8 @@ struct DockerComposePsJson {
 
 pub async fn gather_status_data(
     context: &ComposeContext,
+    compose: &crate::compose_types::Compose,
 ) -> Result<(Vec<ServiceInfo>, BTreeMap<String, String>)> {
-    // Load compose config with all profiles
-    let compose = load_compose_config(context, Some("*")).await?;
-
     // Collect service information
     let mut services_info: Vec<ServiceInfo> = Vec::new();
     for (name, service_opt) in &compose.services {
