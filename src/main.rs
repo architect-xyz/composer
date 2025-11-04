@@ -1,6 +1,7 @@
 use crate::compose::*;
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use chrono_tz::Tz;
 use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
@@ -245,6 +246,7 @@ async fn main() -> Result<()> {
             &["image", "prune", "-f"],
             slack_webhook_url.clone(),
             slack_webhook_on_error_url.clone(),
+            chrono_tz::UTC,
         ));
     }
 
@@ -402,6 +404,17 @@ fn run_tasks(
                 } else {
                     None
                 };
+                // Parse timezone label
+                let timezone: Tz = labels
+                    .get("co.architect.composer.tz")
+                    .and_then(|tz_str| {
+                        tz_str.parse::<Tz>().map_err(|e| {
+                            warn!("invalid timezone '{tz_str}' for service {name}: {e}, defaulting to UTC");
+                            e
+                        }).ok()
+                    })
+                    .unwrap_or(chrono_tz::UTC);
+
                 for (key, value) in labels {
                     let action = if RUN_KEYS.contains(&key.as_str()) {
                         // don't monitor services that are run one-shot
@@ -416,7 +429,7 @@ fn run_tasks(
                         let schedule: Schedule = value.parse().with_context(|| {
                             format!("while parsing cron expression: {value}")
                         })?;
-                        info!("service {name} has a {action} schedule: {schedule}");
+                        info!("service {name} has a {action} schedule: {schedule} (timezone: {timezone})");
                         tasks.spawn(run_on_schedule(
                             context.clone(),
                             action,
@@ -425,6 +438,7 @@ fn run_tasks(
                             run_logs.clone(),
                             maybe_slack_webhook_url.clone(),
                             maybe_slack_webhook_on_error_url.clone(),
+                            timezone,
                         ));
                     }
                     // for up in schedule.upcoming(Utc).take(3) {
@@ -466,24 +480,26 @@ async fn run_on_schedule(
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
+    timezone: Tz,
 ) {
     loop {
-        let up = match schedule.upcoming(Utc).next() {
+        let up = match schedule.upcoming(timezone).next() {
             Some(up) => up,
             None => {
                 warn!("no more upcoming {action}s for {service}, task exiting");
                 break;
             }
         };
-        let duration_from_now = (up - Utc::now()).to_std().unwrap();
+        let up_utc = up.with_timezone(&Utc);
+        let duration_from_now = (up_utc - Utc::now()).to_std().unwrap();
         info!(
             "next {action} for {service} in {}",
             humantime::format_duration(duration_from_now)
         );
         tokio::time::sleep(duration_from_now).await;
         let now = Utc::now();
-        if (now - up).abs() > chrono::Duration::seconds(1) {
-            error!("time skew for scheduled {action}: expected {up}, is {now}");
+        if (now - up_utc).abs() > chrono::Duration::seconds(1) {
+            error!("time skew for scheduled {action}: expected {up_utc}, is {now}");
         }
         info!("{} {service}...", action.as_gerund());
         let mut cmd = compose_command(&context, None::<&str>);
@@ -553,7 +569,7 @@ async fn run_on_schedule(
                 &service,
                 action,
                 out.status.success(),
-                up,
+                up_utc,
             )
             .await
             {
@@ -568,7 +584,7 @@ async fn run_on_schedule(
                     &service,
                     action,
                     out.status.success(),
-                    up,
+                    up_utc,
                 )
                 .await
                 {
