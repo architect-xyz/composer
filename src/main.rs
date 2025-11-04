@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
 use serde_json::json;
-use std::{fs::File, path::PathBuf, sync::Arc};
+use std::{fs::File, path::PathBuf};
 use tokio::task::JoinSet;
 
 mod certificate_monitor;
@@ -70,6 +70,14 @@ struct Cli {
     /// Run `docker image prune -f` on the provided schedule.
     #[clap(long, env = "PRUNE_IMAGES")]
     prune_images: Option<String>,
+    /// If set to "true" or "1", watch the compose file for
+    /// changes and automatically restart the scheduler.
+    ///
+    /// Note that restarting the scheduler may cause some jobs
+    /// or scheduled restarts to be lost, as a scheduler restart
+    /// typically causes ~1s of downtime.
+    #[clap(long, env = "WATCH_COMPOSE_FILE")]
+    watch_compose_file: Option<String>,
     /// Slack webhook URL for notifications.
     /// You may also set this via env var SLACK_WEBHOOK_URL.
     ///
@@ -165,14 +173,213 @@ async fn main() -> Result<()> {
         .map(|s| s.clone())
         .and_then(sanitize_url);
     let prune_images = args.prune_images.clone();
+    let container_monitor =
+        args.container_monitor.is_some_and(|v| v == "true" || v == "1");
+    let compose_file = std::fs::canonicalize(args.compose_file)?;
     let context = ComposeContext {
-        compose_file: args.compose_file.to_owned(),
+        compose_file,
         env_file: args.env_file.map(|f| f.to_owned()),
         project_directory,
         hostname,
     };
-    let compose = load_compose_config(&context, Some("*")).await?;
-    let mut scheduler = JoinSet::new();
+    let mut aux_tasks = JoinSet::new();
+
+    // add system monitor task
+    if let Some(config_file) = args.system_monitor {
+        let config: system_monitor::SystemMonitorConfig =
+            if config_file.to_lowercase() == "true" || config_file == "1" {
+                serde_yaml::from_str("{}")?
+            } else {
+                let config_s = std::fs::read_to_string(config_file)?;
+                serde_yaml::from_str(&config_s)?
+            };
+        let context = context.clone();
+        let slack_webhook_url = slack_webhook_url.clone();
+        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        aux_tasks.spawn(async move {
+            if let Err(e) = system_monitor::run(
+                context.hostname,
+                config,
+                slack_webhook_url,
+                slack_webhook_on_error_url,
+            )
+            .await
+            {
+                panic!("while running system monitor: {e:?}");
+            }
+        });
+    }
+
+    // add certificate monitor task
+    if let Some(config_file) = args.certificate_monitor {
+        let config_s = std::fs::read_to_string(config_file)?;
+        let config: certificate_monitor::CertificateMonitorConfig =
+            serde_yaml::from_str(&config_s)?;
+        let context = context.clone();
+        let slack_webhook_url = slack_webhook_url.clone();
+        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
+        aux_tasks.spawn(async move {
+            if let Err(e) = certificate_monitor::run(
+                context.hostname,
+                config,
+                slack_webhook_url,
+                slack_webhook_on_error_url,
+            )
+            .await
+            {
+                panic!("while running certificate monitor: {e:?}");
+            }
+        });
+    }
+
+    // add pruning tasks
+    if let Some(prune_images) = prune_images {
+        let schedule: Schedule = prune_images
+            .parse()
+            .with_context(|| format!("while parsing cron expression: {prune_images}"))?;
+        aux_tasks.spawn(scheduler::run_command_on_schedule(
+            context.clone(),
+            schedule,
+            "prune images",
+            "docker",
+            &["image", "prune", "-f"],
+            slack_webhook_url.clone(),
+            slack_webhook_on_error_url.clone(),
+        ));
+    }
+
+    // start main tasks which depend on the compose file; if the compose
+    // file is observed to change, restart the tasks.
+    let (changed_tx, mut changed_rx) = tokio::sync::mpsc::channel(1);
+    if args.watch_compose_file.is_some_and(|v| v == "true" || v == "1") {
+        let compose_file = context.compose_file.clone();
+        tokio::task::spawn_blocking(move || {
+            watch_compose_file(compose_file, changed_tx.clone())
+                .expect("error watching compose file");
+        });
+    }
+    let mut compose = load_compose_config(&context, Some("*")).await?;
+    'outer: loop {
+        info!("compose config reloaded");
+        info!("starting scheduler...");
+        let mut tasks = run_tasks(
+            &context,
+            &compose,
+            slack_webhook_url.clone(),
+            slack_webhook_on_error_url.clone(),
+            run_logs.clone(),
+            container_monitor,
+        )?;
+
+        // add status server task
+        {
+            let context = context.clone();
+            tasks.spawn(async move {
+                if let Err(e) =
+                    status_server::run_status_server(context, compose, args.status_port)
+                        .await
+                {
+                    error!("error running status server: {e:?}");
+                }
+            });
+        }
+
+        'inner: loop {
+            info!("scheduler started, listening for compose file changes");
+            changed_rx.recv().await.ok_or_else(|| anyhow!("watch channel closed"))?;
+            // compose file changed, attempt to reload config
+            // if failed, do NOTHING; continue with the last good config
+            match load_compose_config(&context, Some("*")).await {
+                Ok(new_compose) => {
+                    compose = new_compose;
+                    // new config is good, stop all tasks and restart
+                    info!("stopping scheduler...");
+                    tasks.shutdown().await;
+                    // flush out any additional changes, we know
+                    while let Ok(()) = changed_rx.try_recv() {}
+                    continue 'outer;
+                }
+                Err(e) => {
+                    error!("error reloading compose config: {e:?}");
+                    info!("continuing with last good config");
+                    continue 'inner;
+                }
+            }
+        }
+    }
+}
+
+fn watch_compose_file(
+    compose_file: PathBuf,
+    changed_tx: tokio::sync::mpsc::Sender<()>,
+) -> Result<()> {
+    use notify::{Config, EventKind, PollWatcher, RecursiveMode, Watcher};
+    use std::{path::Path, time::Duration};
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    // NB: only the PollWatcher is reliable w.r.t. Docker volume mounts cross-platform
+    let mut watcher = PollWatcher::new(
+        move |res| {
+            debug!("compose file event: {res:?}");
+            tx.send(res).unwrap();
+        },
+        Config::default().with_poll_interval(Duration::from_secs(1)),
+    )?;
+
+    let mut file_contents = std::fs::read_to_string(&compose_file)?;
+
+    // Watch the directory containing the compose file, not the file itself;
+    // watching the file directly might not work if it gets replaced.
+    let watch_path = match compose_file.parent() {
+        Some(parent) => parent,
+        None => Path::new("/"),
+    };
+    watcher.watch(watch_path, RecursiveMode::NonRecursive)?;
+    info!(
+        "watching compose file {} via {}",
+        compose_file.display(),
+        watch_path.display()
+    );
+
+    loop {
+        let event = rx.recv()??;
+        if matches!(
+            event.kind,
+            EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+        ) && event.paths.iter().any(|path| path == &compose_file)
+        {
+            // check if the file contents have actually changed;
+            // for file deletion, the read will fail and we
+            // will assume that the file has changed.
+            //
+            // the reason not to use notify's compare_contents
+            // feature is that we are watching the parent directory
+            // and only need to compare contents on this particular
+            // file, so we do it manually behind this filter.
+            match std::fs::read_to_string(&compose_file) {
+                Ok(new_file_contents) => {
+                    if new_file_contents != file_contents {
+                        file_contents = new_file_contents;
+                        changed_tx.blocking_send(()).unwrap();
+                    }
+                }
+                Err(_) => {
+                    changed_tx.blocking_send(()).unwrap();
+                }
+            }
+        }
+    }
+}
+
+fn run_tasks(
+    context: &ComposeContext,
+    compose: &compose_types::Compose,
+    slack_webhook_url: Option<String>,
+    slack_webhook_on_error_url: Option<String>,
+    run_logs: Option<PathBuf>,
+    container_monitor: bool,
+) -> Result<JoinSet<()>> {
+    let mut tasks = JoinSet::new();
     let mut monitor_containers = vec![];
     for (name, service) in &compose.services {
         debug!("parsing service: {name}");
@@ -210,7 +417,7 @@ async fn main() -> Result<()> {
                             format!("while parsing cron expression: {value}")
                         })?;
                         info!("service {name} has a {action} schedule: {schedule}");
-                        scheduler.spawn(run_on_schedule(
+                        tasks.spawn(run_on_schedule(
                             context.clone(),
                             action,
                             schedule,
@@ -231,11 +438,11 @@ async fn main() -> Result<()> {
         }
     }
     // add container monitor task
-    if args.container_monitor.is_some_and(|v| v == "true" || v == "1") {
+    if container_monitor {
         let context = context.clone();
         let slack_webhook_url = slack_webhook_url.clone();
         let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
-        scheduler.spawn(async move {
+        tasks.spawn(async move {
             if let Err(e) = container_monitor::run(
                 context.clone(),
                 monitor_containers,
@@ -248,79 +455,7 @@ async fn main() -> Result<()> {
             }
         });
     }
-    // add system monitor task
-    if let Some(config_file) = args.system_monitor {
-        let config: system_monitor::SystemMonitorConfig =
-            if config_file.to_lowercase() == "true" || config_file == "1" {
-                serde_yaml::from_str("{}")?
-            } else {
-                let config_s = std::fs::read_to_string(config_file)?;
-                serde_yaml::from_str(&config_s)?
-            };
-        let context = context.clone();
-        let slack_webhook_url = slack_webhook_url.clone();
-        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
-        scheduler.spawn(async move {
-            if let Err(e) = system_monitor::run(
-                context.hostname,
-                config,
-                slack_webhook_url,
-                slack_webhook_on_error_url,
-            )
-            .await
-            {
-                panic!("while running system monitor: {e:?}");
-            }
-        });
-    }
-    // add certificate monitor task
-    if let Some(config_file) = args.certificate_monitor {
-        let config_s = std::fs::read_to_string(config_file)?;
-        let config: certificate_monitor::CertificateMonitorConfig =
-            serde_yaml::from_str(&config_s)?;
-        let context = context.clone();
-        let slack_webhook_url = slack_webhook_url.clone();
-        let slack_webhook_on_error_url = slack_webhook_on_error_url.clone();
-        scheduler.spawn(async move {
-            if let Err(e) = certificate_monitor::run(
-                context.hostname,
-                config,
-                slack_webhook_url,
-                slack_webhook_on_error_url,
-            )
-            .await
-            {
-                panic!("while running certificate monitor: {e:?}");
-            }
-        });
-    }
-    // add pruning tasks
-    if let Some(prune_images) = prune_images {
-        let schedule: Schedule = prune_images
-            .parse()
-            .with_context(|| format!("while parsing cron expression: {prune_images}"))?;
-        scheduler.spawn(scheduler::run_command_on_schedule(
-            context.clone(),
-            schedule,
-            "prune images",
-            "docker",
-            &["image", "prune", "-f"],
-            slack_webhook_url.clone(),
-            slack_webhook_on_error_url.clone(),
-        ));
-    }
-    // add status server task
-    {
-        let context = Arc::new(context.clone());
-        let status_port = args.status_port;
-        scheduler.spawn(async move {
-            if let Err(e) = status_server::run_status_server(context, status_port).await {
-                error!("error running status server: {e:?}");
-            }
-        });
-    }
-    scheduler.join_all().await;
-    Ok(())
+    Ok(tasks)
 }
 
 async fn run_on_schedule(
