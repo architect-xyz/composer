@@ -1,3 +1,5 @@
+![composer logo](LOGO.png)
+
 # composer
 
 Run or restart docker-compose services on a cron schedule.  This composer can itself be run as a docker-compose service--see `compose.yml` for an example.

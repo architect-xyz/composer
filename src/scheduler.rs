@@ -163,58 +163,90 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn test_schedule_across_dst_boundary() {
-        // Test that scheduling works correctly across a DST boundary
+    fn test_daily_schedule_across_dst_spring_forward() {
+        // Test a daily task at 2:30 AM across the spring forward DST transition
         // America/Chicago transitions from CST to CDT on March 10, 2024 at 2:00 AM
-        // (clocks spring forward to 3:00 AM)
+        // (clocks spring forward to 3:00 AM, so 2:30 AM doesn't exist on that day)
 
         let chicago = chrono_tz::America::Chicago;
 
-        // Create a schedule that runs every hour: "0 0 * * * *"
-        let schedule: Schedule = "0 0 * * * *".parse().expect("valid cron expression");
+        // Daily at 2:30 AM: "0 30 2 * * *"
+        let schedule: Schedule = "0 30 2 * * *".parse().expect("valid cron expression");
 
-        // Start from a point before DST transition: March 10, 2024 at 1:00 AM CST
-        let start_time = chicago.with_ymd_and_hms(2024, 3, 10, 1, 0, 0).unwrap();
+        // Start from March 8, 2024 at 3:00 AM CST (before DST transition)
+        let start_time = chicago.with_ymd_and_hms(2024, 3, 8, 3, 0, 0).unwrap();
 
-        // Get the next few scheduled times
+        // Get the next 5 scheduled times
         let upcoming: Vec<_> = schedule.after(&start_time).take(5).collect();
 
-        // Verify we have 5 scheduled times
-        assert_eq!(upcoming.len(), 5);
+        // Expected times:
+        // March 9, 2024 at 2:30 AM CST
+        // March 11, 2024 at 2:30 AM CDT (March 10 is SKIPPED - 2:30 AM doesn't exist that day)
+        // March 12, 2024 at 2:30 AM CDT
+        // March 13, 2024 at 2:30 AM CDT
+        // March 14, 2024 at 2:30 AM CDT
+        //
+        // Note: The cron library skips March 10 entirely since the scheduled time doesn't exist.
+        // This is correct behavior - the task simply doesn't run on days when the time is invalid.
+        let expected = [
+            "2024-03-09 02:30:00 CST",
+            "2024-03-11 02:30:00 CDT",
+            "2024-03-12 02:30:00 CDT",
+            "2024-03-13 02:30:00 CDT",
+            "2024-03-14 02:30:00 CDT",
+        ];
+
+        assert_eq!(upcoming.len(), expected.len());
+
+        for (i, (actual, expected_str)) in upcoming.iter().zip(expected.iter()).enumerate() {
+            let actual_str = format!("{}", actual.format("%Y-%m-%d %H:%M:%S %Z"));
+            assert_eq!(
+                &actual_str, expected_str,
+                "Mismatch at index {}: expected '{}', got '{}'",
+                i, expected_str, actual_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_hourly_schedule_at_dst_spring_forward() {
+        // Test an hourly task at the exact moment of DST spring forward
+        // America/Chicago: March 10, 2024 at 2:00 AM CST -> 3:00 AM CDT
+
+        let chicago = chrono_tz::America::Chicago;
+
+        // Every hour on the hour: "0 0 * * * *"
+        let schedule: Schedule = "0 0 * * * *".parse().expect("valid cron expression");
+
+        // Start from March 10, 2024 at 12:30 AM CST (just after midnight)
+        let start_time = chicago.with_ymd_and_hms(2024, 3, 10, 0, 30, 0).unwrap();
+
+        // Get the next 5 scheduled times
+        let upcoming: Vec<_> = schedule.after(&start_time).take(5).collect();
 
         // Expected times:
-        // 1. March 10, 2024 at 2:00 AM CST (this becomes 3:00 AM CDT due to DST)
-        // 2. March 10, 2024 at 3:00 AM CDT
-        // 3. March 10, 2024 at 4:00 AM CDT
-        // 4. March 10, 2024 at 5:00 AM CDT
-        // 5. March 10, 2024 at 6:00 AM CDT
+        // 1:00 AM CST
+        // 3:00 AM CDT (2:00 AM doesn't exist - clocks jump from 2:00 AM to 3:00 AM)
+        // 4:00 AM CDT
+        // 5:00 AM CDT
+        // 6:00 AM CDT
+        let expected = [
+            "2024-03-10 01:00:00 CST",
+            "2024-03-10 03:00:00 CDT",
+            "2024-03-10 04:00:00 CDT",
+            "2024-03-10 05:00:00 CDT",
+            "2024-03-10 06:00:00 CDT",
+        ];
 
-        // Note: During DST transition, 2:00 AM doesn't exist (clocks jump to 3:00 AM)
-        // The cron library should handle this correctly
+        assert_eq!(upcoming.len(), expected.len());
 
-        // Verify that times are increasing
-        for i in 1..upcoming.len() {
-            assert!(upcoming[i] > upcoming[i - 1],
-                "Scheduled times should be strictly increasing, but {} is not after {}",
-                upcoming[i], upcoming[i - 1]);
-        }
-
-        // Verify the first scheduled time is after our start time
-        assert!(upcoming[0] > start_time,
-            "First scheduled time {} should be after start time {}",
-            upcoming[0], start_time);
-
-        // Convert to UTC and verify the time differences
-        let utc_times: Vec<_> = upcoming.iter().map(|dt| dt.with_timezone(&Utc)).collect();
-
-        // Check that most intervals are approximately 1 hour (3600 seconds)
-        // Note: during DST transition, one interval will be shorter (0 seconds if 2 AM is skipped)
-        for i in 1..utc_times.len() {
-            let diff = (utc_times[i] - utc_times[i - 1]).num_seconds();
-            // Allow for DST transitions where an hour is skipped
-            assert!(diff >= 0 && diff <= 3600,
-                "Time difference should be between 0 and 3600 seconds, but got {} seconds between {} and {}",
-                diff, utc_times[i], utc_times[i - 1]);
+        for (i, (actual, expected_str)) in upcoming.iter().zip(expected.iter()).enumerate() {
+            let actual_str = format!("{}", actual.format("%Y-%m-%d %H:%M:%S %Z"));
+            assert_eq!(
+                &actual_str, expected_str,
+                "Mismatch at index {}: expected '{}', got '{}'",
+                i, expected_str, actual_str
+            );
         }
     }
 
