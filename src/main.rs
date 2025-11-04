@@ -404,15 +404,10 @@ fn run_tasks(
                 } else {
                     None
                 };
-                // Parse timezone label
-                let timezone: Tz = labels
+                let schedule_timezone: Tz = labels
                     .get("co.architect.composer.tz")
-                    .and_then(|tz_str| {
-                        tz_str.parse::<Tz>().map_err(|e| {
-                            warn!("invalid timezone '{tz_str}' for service {name}: {e}, defaulting to UTC");
-                            e
-                        }).ok()
-                    })
+                    .map(|tz_str| tz_str.parse::<Tz>())
+                    .transpose()?
                     .unwrap_or(chrono_tz::UTC);
 
                 for (key, value) in labels {
@@ -429,16 +424,16 @@ fn run_tasks(
                         let schedule: Schedule = value.parse().with_context(|| {
                             format!("while parsing cron expression: {value}")
                         })?;
-                        info!("service {name} has a {action} schedule: {schedule} (timezone: {timezone})");
+                        info!("service {name} has a {action} schedule: {schedule} ({schedule_timezone})");
                         tasks.spawn(run_on_schedule(
                             context.clone(),
                             action,
                             schedule,
+                            schedule_timezone,
                             name.clone(),
                             run_logs.clone(),
                             maybe_slack_webhook_url.clone(),
                             maybe_slack_webhook_on_error_url.clone(),
-                            timezone,
                         ));
                     }
                     // for up in schedule.upcoming(Utc).take(3) {
@@ -476,14 +471,14 @@ async fn run_on_schedule(
     context: ComposeContext,
     action: ComposeAction,
     schedule: Schedule,
+    schedule_timezone: Tz,
     service: String,
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
-    timezone: Tz,
 ) {
     loop {
-        let up = match schedule.upcoming(timezone).next() {
+        let up = match schedule.upcoming(schedule_timezone).next() {
             Some(up) => up,
             None => {
                 warn!("no more upcoming {action}s for {service}, task exiting");

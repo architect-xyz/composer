@@ -161,116 +161,70 @@ async fn notify_slack(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::fmt::Display;
+
+    fn assert_schedule_matches(
+        actual: Vec<DateTime<Tz>>,
+        expected: Vec<&str>,
+        expected_is_utc: bool,
+    ) where
+        Tz: TimeZone,
+        <Tz as TimeZone>::Offset: Display,
+    {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected_str)) in actual.iter().zip(expected.iter()).enumerate()
+        {
+            let actual_str = if expected_is_utc {
+                format!("{}", actual.with_timezone(&Utc).format("%Y-%m-%d %H:%M:%S %Z"))
+            } else {
+                format!("{}", actual.format("%Y-%m-%d %H:%M:%S %Z"))
+            };
+            assert_eq!(
+                actual_str, *expected_str,
+                "mismatch at index {i}: expected {expected_str}, got {actual_str}",
+            );
+        }
+    }
 
     #[test]
-    fn test_daily_schedule_across_dst_spring_forward() {
-        // Test a daily task at 2:30 AM across the spring forward DST transition
-        // America/Chicago transitions from CST to CDT on March 10, 2024 at 2:00 AM
-        // (clocks spring forward to 3:00 AM, so 2:30 AM doesn't exist on that day)
-
+    fn test_timezone_aware_schedule() {
         let chicago = chrono_tz::America::Chicago;
 
-        // Daily at 2:30 AM: "0 30 2 * * *"
-        let schedule: Schedule = "0 30 2 * * *".parse().expect("valid cron expression");
-
-        // Start from March 8, 2024 at 3:00 AM CST (before DST transition)
-        let start_time = chicago.with_ymd_and_hms(2024, 3, 8, 3, 0, 0).unwrap();
-
-        // Get the next 5 scheduled times
+        // Every day at 4:00 PM America/Chicago
+        let schedule: Schedule = "0 0 16 * * *".parse().expect("valid cron expression");
+        let start_time = chicago.with_ymd_and_hms(2026, 3, 6, 12, 0, 0).unwrap();
         let upcoming: Vec<_> = schedule.after(&start_time).take(5).collect();
+        let expected_in_utc = vec![
+            "2026-03-06 22:00:00 UTC", // CST is UTC-6
+            "2026-03-07 22:00:00 UTC",
+            "2026-03-08 21:00:00 UTC", // CDT is UTC-5
+            "2026-03-09 21:00:00 UTC",
+            "2026-03-10 21:00:00 UTC",
+        ];
+        assert_schedule_matches(upcoming, expected_in_utc, true);
+    }
 
-        // Expected times:
-        // March 9, 2024 at 2:30 AM CST
-        // March 11, 2024 at 2:30 AM CDT (March 10 is SKIPPED - 2:30 AM doesn't exist that day)
-        // March 12, 2024 at 2:30 AM CDT
-        // March 13, 2024 at 2:30 AM CDT
-        // March 14, 2024 at 2:30 AM CDT
-        //
-        // Note: The cron library skips March 10 entirely since the scheduled time doesn't exist.
-        // This is correct behavior - the task simply doesn't run on days when the time is invalid.
-        let expected = [
+    /// Demonstrate an edge case where the scheduler will skip a day!
+    ///
+    /// This is due to the specific legal definition of how daylight savings time
+    /// is applied in the United States, skipping an hour.
+    #[test]
+    fn test_daylight_savings_time_edge_case() {
+        let chicago = chrono_tz::America::Chicago;
+
+        // Every day at 2:30 AM America/Chicago
+        let schedule: Schedule = "0 30 2 * * *".parse().expect("valid cron expression");
+        let start_time = chicago.with_ymd_and_hms(2024, 3, 8, 12, 0, 0).unwrap();
+        let upcoming: Vec<_> = schedule.after(&start_time).take(5).collect();
+        let expected = vec![
             "2024-03-09 02:30:00 CST",
+            // March 10 is skipped because March 10th, 2:30 AM is not a valid time in Chicago;
+            // the clock jumps immediately from 2:00 AM CST to 3:00 AM CDT.
             "2024-03-11 02:30:00 CDT",
             "2024-03-12 02:30:00 CDT",
             "2024-03-13 02:30:00 CDT",
             "2024-03-14 02:30:00 CDT",
         ];
-
-        assert_eq!(upcoming.len(), expected.len());
-
-        for (i, (actual, expected_str)) in upcoming.iter().zip(expected.iter()).enumerate() {
-            let actual_str = format!("{}", actual.format("%Y-%m-%d %H:%M:%S %Z"));
-            assert_eq!(
-                &actual_str, expected_str,
-                "Mismatch at index {}: expected '{}', got '{}'",
-                i, expected_str, actual_str
-            );
-        }
-    }
-
-    #[test]
-    fn test_hourly_schedule_at_dst_spring_forward() {
-        // Test an hourly task at the exact moment of DST spring forward
-        // America/Chicago: March 10, 2024 at 2:00 AM CST -> 3:00 AM CDT
-
-        let chicago = chrono_tz::America::Chicago;
-
-        // Every hour on the hour: "0 0 * * * *"
-        let schedule: Schedule = "0 0 * * * *".parse().expect("valid cron expression");
-
-        // Start from March 10, 2024 at 12:30 AM CST (just after midnight)
-        let start_time = chicago.with_ymd_and_hms(2024, 3, 10, 0, 30, 0).unwrap();
-
-        // Get the next 5 scheduled times
-        let upcoming: Vec<_> = schedule.after(&start_time).take(5).collect();
-
-        // Expected times:
-        // 1:00 AM CST
-        // 3:00 AM CDT (2:00 AM doesn't exist - clocks jump from 2:00 AM to 3:00 AM)
-        // 4:00 AM CDT
-        // 5:00 AM CDT
-        // 6:00 AM CDT
-        let expected = [
-            "2024-03-10 01:00:00 CST",
-            "2024-03-10 03:00:00 CDT",
-            "2024-03-10 04:00:00 CDT",
-            "2024-03-10 05:00:00 CDT",
-            "2024-03-10 06:00:00 CDT",
-        ];
-
-        assert_eq!(upcoming.len(), expected.len());
-
-        for (i, (actual, expected_str)) in upcoming.iter().zip(expected.iter()).enumerate() {
-            let actual_str = format!("{}", actual.format("%Y-%m-%d %H:%M:%S %Z"));
-            assert_eq!(
-                &actual_str, expected_str,
-                "Mismatch at index {}: expected '{}', got '{}'",
-                i, expected_str, actual_str
-            );
-        }
-    }
-
-    #[test]
-    fn test_schedule_with_utc() {
-        // Test that UTC timezone works correctly (no DST)
-        let utc = chrono_tz::UTC;
-
-        // Create a schedule that runs every hour
-        let schedule: Schedule = "0 0 * * * *".parse().expect("valid cron expression");
-
-        // Start from an arbitrary time
-        let start_time = utc.with_ymd_and_hms(2024, 3, 10, 1, 0, 0).unwrap();
-
-        // Get the next 5 scheduled times
-        let upcoming: Vec<_> = schedule.after(&start_time).take(5).collect();
-
-        assert_eq!(upcoming.len(), 5);
-
-        // With UTC, all intervals should be exactly 1 hour
-        for i in 1..upcoming.len() {
-            let diff = (upcoming[i] - upcoming[i - 1]).num_seconds();
-            assert_eq!(diff, 3600,
-                "UTC time differences should always be exactly 3600 seconds, got {}", diff);
-        }
+        assert_schedule_matches(upcoming, expected, false);
     }
 }
