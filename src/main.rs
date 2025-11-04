@@ -70,6 +70,14 @@ struct Cli {
     /// Run `docker image prune -f` on the provided schedule.
     #[clap(long, env = "PRUNE_IMAGES")]
     prune_images: Option<String>,
+    /// If set to "true" or "1", watch the compose file for
+    /// changes and automatically restart the scheduler.
+    ///
+    /// Note that restarting the scheduler may cause some jobs
+    /// or scheduled restarts to be lost, as a scheduler restart
+    /// typically causes ~1s of downtime.
+    #[clap(long, env = "WATCH_COMPOSE_FILE")]
+    watch_compose_file: Option<String>,
     /// Slack webhook URL for notifications.
     /// You may also set this via env var SLACK_WEBHOOK_URL.
     ///
@@ -243,7 +251,7 @@ async fn main() -> Result<()> {
     // start main tasks which depend on the compose file; if the compose
     // file is observed to change, restart the tasks.
     let (changed_tx, mut changed_rx) = tokio::sync::mpsc::channel(1);
-    {
+    if args.watch_compose_file.is_some_and(|v| v == "true" || v == "1") {
         let compose_file = context.compose_file.clone();
         tokio::task::spawn_blocking(move || {
             watch_compose_file(compose_file, changed_tx.clone())
