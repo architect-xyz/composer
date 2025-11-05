@@ -1,4 +1,6 @@
-<img src="LOGO.png" alt="composer logo" width="33%" />
+<p align="center">
+  <img src="LOGO.png" alt="composer logo" width="33%" />
+</p>
 
 # composer
 
