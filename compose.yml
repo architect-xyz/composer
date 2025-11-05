@@ -14,6 +14,8 @@ services:
       - "co.architect.composer.run=*/30 * * * * *"
       - "co.architect.composer.notify.slack=true"
       - "co.architect.composer.notify.slack.on-error=true"
+      # specify timezone for schedule (defaults to UTC if not specified)
+      - "co.architect.composer.tz=America/Chicago"
 
   repeat_myself:
     image: "alpine:3.12"
