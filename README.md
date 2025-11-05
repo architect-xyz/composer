@@ -1,4 +1,4 @@
-![composer logo](LOGO.png)
+<img src="LOGO.png" alt="composer logo" width="33%" />
 
 # composer
 
