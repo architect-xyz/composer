@@ -65,6 +65,30 @@ foo:
         - "co.architect.composer.run=0 0 10 * * *"
 ```
 
+### Multiple schedules
+
+A service can have multiple schedules by using suffixed labels. The suffix can be any string:
+
+```yaml
+foo:
+    container_name: foo_container
+    command: >-
+        /app/foo.sh
+    labels:
+        - "co.architect.composer.run.morning=0 0 8 * * *"
+        - "co.architect.composer.run.evening=0 0 18 * * *"
+```
+
+This also works for restart schedules:
+
+```yaml
+bar:
+    container_name: bar_container
+    labels:
+        - "co.architect.composer.restart.weekday=0 0 6 * * MON-FRI"
+        - "co.architect.composer.restart.weekend=0 0 9 * * SAT,SUN"
+```
+
 ### Installing aliases
 
 ```

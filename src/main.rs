@@ -106,8 +106,26 @@ enum Commands {
     Install(install_commands::InstallCommands),
 }
 
-const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
-const RESTART_KEYS: [&str; 1] = ["co.architect.composer.restart"];
+const RUN_KEY: &str = "co.architect.composer.run";
+const RESTART_KEY: &str = "co.architect.composer.restart";
+
+/// Check if a label key is a schedule label and return the corresponding action
+/// and optional schedule name (the suffix after the base key).
+/// Matches exact keys (e.g., `co.architect.composer.run`) and suffixed keys
+/// (e.g., `co.architect.composer.run.morning`).
+fn get_schedule_action(key: &str) -> Option<(ComposeAction, Option<&str>)> {
+    if key == RUN_KEY {
+        Some((ComposeAction::Run, None))
+    } else if let Some(suffix) = key.strip_prefix(&format!("{RUN_KEY}.")) {
+        Some((ComposeAction::Run, Some(suffix)))
+    } else if key == RESTART_KEY {
+        Some((ComposeAction::Restart, None))
+    } else if let Some(suffix) = key.strip_prefix(&format!("{RESTART_KEY}.")) {
+        Some((ComposeAction::Restart, Some(suffix)))
+    } else {
+        None
+    }
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -411,26 +429,31 @@ fn run_tasks(
                     .unwrap_or(chrono_tz::UTC);
 
                 for (key, value) in labels {
-                    let action = if RUN_KEYS.contains(&key.as_str()) {
-                        // don't monitor services that are run one-shot
-                        should_monitor = false;
-                        ComposeAction::Run
-                    } else if RESTART_KEYS.contains(&key.as_str()) {
-                        ComposeAction::Restart
-                    } else {
-                        continue;
+                    let (action, schedule_name) = match get_schedule_action(key) {
+                        Some((ComposeAction::Run, schedule_name)) => {
+                            // don't monitor services that are run one-shot
+                            should_monitor = false;
+                            (ComposeAction::Run, schedule_name)
+                        }
+                        Some((ComposeAction::Restart, schedule_name)) => {
+                            (ComposeAction::Restart, schedule_name)
+                        }
+                        None => continue,
                     };
                     if value != "manual" {
                         let schedule: Schedule = value.parse().with_context(|| {
                             format!("while parsing cron expression: {value}")
                         })?;
-                        info!("service {name} has a {action} schedule: {schedule} ({schedule_timezone})");
+                        let schedule_name_display =
+                            schedule_name.map(|s| format!(" ({s})")).unwrap_or_default();
+                        info!("service {name} has a {action} schedule{schedule_name_display}: {schedule} ({schedule_timezone})");
                         tasks.spawn(run_on_schedule(
                             context.clone(),
                             action,
                             schedule,
                             schedule_timezone,
                             name.clone(),
+                            schedule_name.map(|s| s.to_owned()),
                             run_logs.clone(),
                             maybe_slack_webhook_url.clone(),
                             maybe_slack_webhook_on_error_url.clone(),
@@ -473,22 +496,28 @@ async fn run_on_schedule(
     schedule: Schedule,
     schedule_timezone: Tz,
     service: String,
+    schedule_name: Option<String>,
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
 ) {
+    // Format service name with optional schedule name for log messages
+    let service_display = schedule_name
+        .as_ref()
+        .map(|s| format!("{service} ({s})"))
+        .unwrap_or_else(|| service.clone());
     loop {
         let up = match schedule.upcoming(schedule_timezone).next() {
             Some(up) => up,
             None => {
-                warn!("no more upcoming {action}s for {service}, task exiting");
+                warn!("no more upcoming {action}s for {service_display}, task exiting");
                 break;
             }
         };
         let up_utc = up.with_timezone(&Utc);
         let duration_from_now = (up_utc - Utc::now()).to_std().unwrap();
         info!(
-            "next {action} for {service} in {}",
+            "next {action} for {service_display} in {}",
             humantime::format_duration(duration_from_now)
         );
         tokio::time::sleep(duration_from_now).await;
@@ -496,7 +525,7 @@ async fn run_on_schedule(
         if (now - up_utc).abs() > chrono::Duration::seconds(1) {
             error!("time skew for scheduled {action}: expected {up_utc}, is {now}");
         }
-        info!("{} {service}...", action.as_gerund());
+        info!("{} {service_display}...", action.as_gerund());
         let mut cmd = compose_command(&context, None::<&str>);
         if let Some(run_logs) = run_logs.as_ref() {
             let std_file = |suffix: &str| {
@@ -531,14 +560,14 @@ async fn run_on_schedule(
         let child = match cmd.arg(&service).spawn() {
             Ok(child) => child,
             Err(e) => {
-                error!("error {} {service}: {e}", action.as_gerund());
+                error!("error {} {service_display}: {e}", action.as_gerund());
                 continue;
             }
         };
         let out = match child.wait_with_output().await {
             Ok(out) => out,
             Err(e) => {
-                error!("error while {} {service}: {e}", action.as_gerund());
+                error!("error while {} {service_display}: {e}", action.as_gerund());
                 continue;
             }
         };
@@ -546,16 +575,16 @@ async fn run_on_schedule(
             let stdout_s = std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
             let stderr_s = std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>");
             for line in stdout_s.lines() {
-                debug!("{service} stdout: {line}");
+                debug!("{service_display} stdout: {line}");
             }
             for line in stderr_s.lines() {
-                debug!("{service} stderr: {line}");
+                debug!("{service_display} stderr: {line}");
             }
         }
         if !out.status.success() {
-            error!("{action} {service} failed with status {}", out.status,);
+            error!("{action} {service_display} failed with status {}", out.status,);
         } else {
-            info!("{} {service} succeeded", action.as_gerund());
+            info!("{} {service_display} succeeded", action.as_gerund());
         }
         if let Some(webhook_url) = slack_webhook_url.as_deref() {
             if let Err(e) = notify_slack(
