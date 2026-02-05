@@ -453,6 +453,7 @@ fn run_tasks(
                             schedule,
                             schedule_timezone,
                             name.clone(),
+                            service.image.clone(),
                             schedule_name.map(|s| s.to_owned()),
                             run_logs.clone(),
                             maybe_slack_webhook_url.clone(),
@@ -496,6 +497,7 @@ async fn run_on_schedule(
     schedule: Schedule,
     schedule_timezone: Tz,
     service: String,
+    image: Option<String>,
     schedule_name: Option<String>,
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
@@ -526,6 +528,40 @@ async fn run_on_schedule(
             error!("time skew for scheduled {action}: expected {up_utc}, is {now}");
         }
         info!("{} {service_display}...", action.as_gerund());
+        // Pull image before running if it's not available locally
+        if matches!(action, ComposeAction::Run) {
+            if let Some(image) = image.as_deref() {
+                let needs_pull = match tokio::process::Command::new("docker")
+                    .args(["image", "inspect", image])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+                {
+                    Ok(status) => !status.success(),
+                    Err(_) => true,
+                };
+                if needs_pull {
+                    info!("pulling image for {service_display}...");
+                    let mut pull_cmd = compose_command(&context, None::<&str>);
+                    pull_cmd.arg("pull").arg(&service);
+                    match pull_cmd.output().await {
+                        Ok(out) if !out.status.success() => {
+                            let stderr = std::str::from_utf8(&out.stderr)
+                                .unwrap_or("<invalid utf-8>");
+                            error!(
+                                "pull {service_display} failed (status {}): {stderr}",
+                                out.status
+                            );
+                        }
+                        Err(e) => {
+                            error!("error pulling {service_display}: {e:?}");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         let mut cmd = compose_command(&context, None::<&str>);
         if let Some(run_logs) = run_logs.as_ref() {
             let std_file = |suffix: &str| {
