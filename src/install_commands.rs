@@ -26,8 +26,6 @@ pub enum InstallCommands {
     },
     /// Show installation status
     Status,
-    /// Remove all installed components (aliases, service, binary)
-    Uninstall,
     /// Install a macOS launchd plist for running composer as a daemon
     Launchd {
         /// Working directory (default: current directory)
@@ -47,7 +45,6 @@ pub fn install(command: InstallCommands) -> Result<()> {
         InstallCommands::Bash => install_shell_aliases("bash", ".bashrc.d", "composer.bash"),
         InstallCommands::Zsh => install_shell_aliases("zsh", ".zshrc.d", "composer.zsh"),
         InstallCommands::Status => install_status(),
-        InstallCommands::Uninstall => uninstall(),
         InstallCommands::Systemd {
             user,
             working_dir,
@@ -120,7 +117,7 @@ fn install_status() -> Result<()> {
     Ok(())
 }
 
-fn uninstall() -> Result<()> {
+pub fn uninstall() -> Result<()> {
     let home = env::var("HOME").unwrap_or_default();
     let mut removed = vec![];
 
@@ -176,6 +173,49 @@ fn uninstall() -> Result<()> {
         println!("\nTo complete uninstall, remove the binary:");
         println!("  sudo rm {}", exe.display());
     }
+
+    Ok(())
+}
+
+pub fn update() -> Result<()> {
+    let exe = env::current_exe().context("failed to get current executable path")?;
+
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let artifact = format!(
+        "composer-{}-{}",
+        os,
+        match arch {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            _ => anyhow::bail!("unsupported architecture: {arch}"),
+        }
+    );
+
+    let url = format!(
+        "https://github.com/architect-xyz/composer/releases/latest/download/{artifact}"
+    );
+
+    println!("Downloading {artifact}...");
+    let status = Command::new("curl")
+        .args(["-fsSL", &url, "-o", &exe.to_string_lossy()])
+        .status()
+        .context("failed to run curl")?;
+    if !status.success() {
+        anyhow::bail!("download failed");
+    }
+
+    // Ensure executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o755))?;
+    }
+
+    println!("Updated composer at {}", exe.display());
+
+    // Print new version
+    let _ = Command::new(&exe).arg("--version").status();
 
     Ok(())
 }

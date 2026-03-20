@@ -106,6 +106,10 @@ enum Commands {
     /// Install additional components
     #[command(subcommand)]
     Install(install_commands::InstallCommands),
+    /// Remove all installed components (aliases, service)
+    Uninstall,
+    /// Update composer to the latest version
+    Update,
 }
 
 const COMPOSE_FILE_CANDIDATES: &[&str] = &[
@@ -195,6 +199,8 @@ async fn main() -> Result<()> {
                 status_command::show_status(&context).await
             }
             Commands::Install(command) => install_commands::install(command),
+            Commands::Uninstall => install_commands::uninstall(),
+            Commands::Update => install_commands::update(),
         };
     }
     let project_directory = args.project_directory.clone();
