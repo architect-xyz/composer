@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/architect-xyz/composer/compare/v0.10.2...v0.10.3) (2026-03-20)
+
+
+### Bug Fixes
+
+* **ci:** use larger Depot ARM runner, add fail-fast: false ([514226e](https://github.com/architect-xyz/composer/commit/514226e1e00321f50571f96a5e62251243cd129c))
+
 ## [0.10.2](https://github.com/architect-xyz/composer/compare/v0.10.1...v0.10.2) (2026-03-20)
 
 
