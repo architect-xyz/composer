@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/architect-xyz/composer/compare/v0.10.3...v0.10.4) (2026-03-20)
+
+
+### Bug Fixes
+
+* **ci:** use GitHub-hosted runners for binary builds ([f91de80](https://github.com/architect-xyz/composer/commit/f91de80f72cd279f8873a0b105ffb9a71145faa9))
+
 ## [0.10.3](https://github.com/architect-xyz/composer/compare/v0.10.2...v0.10.3) (2026-03-20)
 
 
