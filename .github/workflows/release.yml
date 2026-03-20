@@ -2,6 +2,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_call:
 
 jobs:
   build-binaries:
@@ -38,21 +39,27 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
-  release:
+  upload-assets:
     needs: build-binaries
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            composer-linux-amd64/composer-linux-amd64
-            composer-linux-arm64/composer-linux-arm64
-            composer-darwin-amd64/composer-darwin-amd64
-            composer-darwin-arm64/composer-darwin-arm64
+      - name: Extract version from Cargo.toml
+        id: version
+        run: echo "version=v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+      - name: Upload release assets
+        run: |
+          gh release upload "${{ steps.version.outputs.version }}" \
+            composer-linux-amd64/composer-linux-amd64 \
+            composer-linux-arm64/composer-linux-arm64 \
+            composer-darwin-amd64/composer-darwin-amd64 \
+            composer-darwin-arm64/composer-darwin-arm64 \
+            --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
     runs-on: ubuntu-latest
@@ -63,11 +70,14 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Extract version from Cargo.toml
+        id: version
+        run: echo "version=v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
       - name: Build and push Docker image
         run: |
           depot build --push --project 2m5pzqgvpk \
             --platform "linux/arm64,linux/amd64" \
             -t afintech/composer:latest \
-            -t afintech/composer:${{ github.ref_name }} .
+            -t afintech/composer:${{ steps.version.outputs.version }} .
         env:
           DEPOT_TOKEN: ${{ secrets.DEPOT_TOKEN }}
