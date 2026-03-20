@@ -4,159 +4,251 @@
 
 # composer
 
-Run or restart docker-compose services on a cron schedule.  This composer can itself be run as a docker-compose service--see `compose.yml` for an example.
+A Docker Compose scheduler that runs or restarts services on cron schedules.
 
-Composer also provides some extra utilities you may find helpful to your docker-compose practice:
+Composer reads labels from your `compose.yml` services and schedules them
+using Quartz-compatible cron expressions. It also provides host monitoring,
+Slack notifications, certificate monitoring, and automatic Docker image pruning.
 
-- Collect and push host metrics such as CPU, memory, and disk usage to OpenTelementry
-- Monitor the status of docker-compose services and push change notifications to Slack
-- Prune unused docker images periodically
+## Installation
 
-All composer functionality is opt-in and controlled by flags or environment variables.
+### Binary (recommended)
 
-## Usage
+Download the latest release for your platform:
 
-Add `afintech/composer:latest` as a service to your docker compose file.  Generally, the
-following configuration is what you want:
+```bash
+# Linux (amd64)
+curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-linux-amd64 \
+  -o /usr/local/bin/composer
+chmod +x /usr/local/bin/composer
 
+# Linux (arm64)
+curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-linux-arm64 \
+  -o /usr/local/bin/composer
+chmod +x /usr/local/bin/composer
+
+# macOS (Apple Silicon)
+curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-darwin-arm64 \
+  -o /usr/local/bin/composer
+chmod +x /usr/local/bin/composer
+
+# macOS (Intel)
+curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-darwin-amd64 \
+  -o /usr/local/bin/composer
+chmod +x /usr/local/bin/composer
 ```
+
+### Docker
+
+Composer can also run as a Docker Compose service, which requires no host
+installation:
+
+```bash
+docker pull afintech/composer:latest
+```
+
+See [docs/docker.md](docs/docker.md) for the container-based setup.
+
+## Quick start
+
+```bash
+# Install shell aliases
+composer install bash   # or: composer install zsh
+
+# Install as a systemd service (Linux)
+sudo composer install systemd --user ec2-user --working-dir /home/ec2-user
+sudo systemctl enable --now composer
+
+# Install as a launchd service (macOS)
+composer install launchd
+
+# Check installation status
+composer install status
+
+# Run interactively (auto-detects compose file in current directory)
+composer
+```
+
+## Scheduling services
+
+Add labels to your compose services to schedule runs or restarts:
+
+```yaml
 services:
-  # ...
-  scheduler:
-    image: "afintech/composer:latest"
-    environment:
-      # recommended to set log level to debug
-      - RUST_LOG=composer=debug
-      # set a compose project name if this compose file doesn't already define one
-      - COMPOSE_PROJECT_NAME=composer
-      # ensure that docker compose working directory inside this container matches the host
-      - COMPOSE_PROJECT_DIRECTORY=${PWD}
-      # optionally watch the compose file for changes
-      - WATCH_COMPOSE_FILE=true
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      # mount in the docker compose configuration
-      - ./compose.yml:/compose.yml:ro
-      # mount in the env file used by docker compose (optional)
-      - ./.env:/.env:ro
-      # you may also need to mount the env file into the compose --project-directory
-      - ./.env:${PWD}/.env:ro
-```
-
-The scheduler uses container labels to determine when to run or restart them.  For example, the following configures the `foo` service to restart every day at 10:00.
-
-```
-foo:
-    container_name: foo_container
-    command: >-
-        /app/foo.sh
+  backup:
+    image: my-backup:latest
     labels:
-        - "co.architect.composer.restart=0 0 10 * * *"
-```
+      # Run this service every day at 2:00 AM
+      - "co.architect.composer.run=0 0 2 * * *"
 
-and the following configures the `foo` service to run every day at 10:00.
-
-```
-foo:
-    container_name: foo_container
-    command: >-
-        /app/foo.sh
+  api:
+    image: my-api:latest
     labels:
-        - "co.architect.composer.run=0 0 10 * * *"
+      # Restart this service every day at 6:00 AM
+      - "co.architect.composer.restart=0 0 6 * * *"
 ```
+
+Cron expressions are Quartz-compatible (6 fields, seconds first):
+`seconds minutes hours day-of-month month day-of-week`
 
 ### Multiple schedules
 
-A service can have multiple schedules by using suffixed labels. The suffix can be any string:
+A service can have multiple schedules using suffixed labels:
 
 ```yaml
-foo:
-    container_name: foo_container
-    command: >-
-        /app/foo.sh
+services:
+  etl:
+    image: my-etl:latest
     labels:
-        - "co.architect.composer.run.morning=0 0 8 * * *"
-        - "co.architect.composer.run.evening=0 0 18 * * *"
+      - "co.architect.composer.run.morning=0 0 8 * * *"
+      - "co.architect.composer.run.evening=0 0 18 * * *"
+
+  api:
+    image: my-api:latest
+    labels:
+      - "co.architect.composer.restart.weekday=0 0 6 * * MON-FRI"
+      - "co.architect.composer.restart.weekend=0 0 9 * * SAT,SUN"
 ```
 
-This also works for restart schedules:
+### Timezone support
+
+By default, schedules run in UTC. Set a timezone per service:
 
 ```yaml
-bar:
-    container_name: bar_container
-    labels:
-        - "co.architect.composer.restart.weekday=0 0 6 * * MON-FRI"
-        - "co.architect.composer.restart.weekend=0 0 9 * * SAT,SUN"
+labels:
+  - "co.architect.composer.tz=America/New_York"
+  - "co.architect.composer.run=0 0 9 * * *"  # 9 AM Eastern
 ```
 
-### Installing aliases
+### Manual schedules
+
+Use `manual` to register a service with composer (for status tracking)
+without scheduling it:
+
+```yaml
+labels:
+  - "co.architect.composer.run=manual"
+```
+
+## Compose file auto-detection
+
+When run without `-f`, composer searches the current directory for:
+`compose.yml`, `compose.yaml`, `docker-compose.yml`, `docker-compose.yaml`.
+If multiple files are found, it prompts for selection. You can always
+specify a file explicitly with `-f path/to/compose.yml`.
+
+## Shell aliases
+
+Composer ships canonical shell aliases for common Docker Compose operations.
+Install them with:
+
+```bash
+composer install bash   # → ~/.bashrc.d/composer.bash
+composer install zsh    # → ~/.zshrc.d/composer.zsh
+```
+
+Available commands after sourcing:
 
 ```
-docker run --rm -it -v $HOME:/home -e HOME="/home" --user $(id -u):$(id -g) afintech/composer:latest install bash
+Inspect ── status [svc] · logs [-n lines] <svc>
+Control ── start|stop|restart <svc>
+Deploy  ── up|down [-a] [-v] <svc...> · upgrade [--now] <svc>
+Exec    ── run <svc> [args] · exec <svc> [args]
+All commands accept --profile <name>
 ```
+
+If `COMPOSE_PROJECT_DIR` is set before sourcing (e.g. by a project's
+subshell-env script), all commands use `--project-directory` automatically.
+
+See [docs/aliases.md](docs/aliases.md) for full details.
+
+## Slack notifications
+
+Enable Slack notifications per service:
+
+```yaml
+labels:
+  - "co.architect.composer.notify.slack=true"      # all events
+  - "co.architect.composer.notify.slack.on-error=true"  # errors only
+```
+
+Set the webhook URL via environment variable or CLI flag:
+
+```bash
+composer --slack-webhook-url https://hooks.slack.com/...
+# or
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/...
+```
+
+Use `SLACK_WEBHOOK_ON_ERROR_URL` for a separate error-only webhook.
 
 ## Automatic Docker image pruning
 
-Composer can automatically prune unused Docker images on a schedule to free up disk space. This runs the `docker image prune -f` command at the specified interval.
-
-To enable image pruning, set the `PRUNE_IMAGES` environment variable with a cron expression:
-
-```yaml
-scheduler:
-  image: "afintech/composer:latest"
-  environment:
-    - PRUNE_IMAGES=0 0 2 * * *  # Run at 2:00 AM every day
-  volumes:
-    - /var/run/docker.sock:/var/run/docker.sock:ro
-    - ./compose.yml:/compose.yml:ro
+```bash
+composer --prune-images "0 0 2 * * *"   # prune every day at 2 AM
+# or
+export PRUNE_IMAGES="0 0 2 * * *"
 ```
 
-Alternatively, you can use the `--prune-images` CLI argument:
+## Host system monitoring
+
+Composer can monitor and alert on CPU, memory, and disk usage. When running
+as a host-native daemon, no special permissions are needed.
 
 ```bash
-composer --prune-images "0 0 2 * * *" -f compose.yml
+composer --system-monitor true              # default thresholds
+composer --system-monitor config.yml        # custom config
 ```
 
-Like scheduled services, image pruning supports Slack notifications via the `SLACK_WEBHOOK_URL` and `SLACK_WEBHOOK_ON_ERROR_URL` environment variables.
+### Sending metrics to OpenTelemetry
 
-## Host system monitoring from inside Docker
+Set the following environment variables:
 
-Composer can also monitor and alert on host system metrics (CPU, memory, disk).  To do this, the container must have privileged access to the host.  Use the following service config to ensure the correct access:
+- `OTEL_EXPORTER_OTLP_ENDPOINT` — collector endpoint (required)
+- `OTEL_EXPORTER_OTLP_HEADERS` — `key=value,...` HTTP headers (optional)
+- `OTEL_METRIC_EXPORT_INTERVAL` — batch interval in ms (default: 5000)
+
+Exported metrics: `memory.used_pct`, `memory.used_bytes`, `memory.total_bytes`,
+`swap.used_pct`, `swap.used_bytes`, `swap.total_bytes`, `disk.used_pct`,
+`disk.used_bytes`, `disk.total_bytes`.
+
+## CLI reference
 
 ```
-composer:
-  # ...
-  pid: host
-  ipc: host
-  privileged: true
-  network_mode: host
+composer [OPTIONS] [COMMAND]
+
+Options:
+  -f <FILE>                   Compose file (auto-detected if omitted)
+  --env-file <FILE>           Environment file for docker compose
+  --project-directory <DIR>   Project directory for docker compose
+  --run-logs <DIR>            Directory for job stdout/stderr logs
+  --hostname <NAME>           Hostname for notifications (default: system hostname)
+  --status-port <PORT>        Status server port (default: 10080)
+  --prune-images <CRON>       Cron schedule for docker image prune
+  --watch-compose-file true   Auto-reload on compose file changes
+  --slack-webhook-url <URL>   Slack webhook for all notifications
+  --slack-webhook-on-error-url <URL>  Slack webhook for errors only
+  --system-monitor <FILE|true>        System monitoring config
+  --certificate-monitor <FILE>        Certificate monitoring config
+  --container-monitor true            Container status monitoring
+
+Commands:
+  status                      Show status of all services
+  check-certificates          Check SSL certificates and print status
+  install bash                Install bash shell aliases
+  install zsh                 Install zsh shell aliases
+  install systemd             Install systemd service unit (Linux)
+  install launchd             Install launchd plist (macOS)
+  install status              Show installation status
 ```
 
-### Sending host metrics to OpenTelemetry
+All options can also be set via environment variables (`COMPOSE_RUN_LOGS`,
+`HOST`, `STATUS_PORT`, `PRUNE_IMAGES`, `WATCH_COMPOSE_FILE`,
+`SLACK_WEBHOOK_URL`, `SLACK_WEBHOOK_ON_ERROR_URL`, `SYSTEM_MONITOR`,
+`CERTIFICATE_MONITOR`, `CONTAINER_MONITOR`).
 
-Set the following environment variables to push host metrics (CPU, memory, disk usage) to an OpenTelemetry collector:
+## Further reading
 
-- `OTEL_EXPORTER_OTLP_ENDPOINT`: OTEL collector endpoint (required)
-- `OTEL_EXPORTER_OTLP_HEADERS`: `key1=value1,key2=value2` OTEL collector HTTP headers (optional)
-- `OTEL_METRIC_EXPORT_INTERVAL`: batch time in milliseconds (optional, default=5000)
-
-The following metrics will be pushed:
-
-- `memory.used_pct`: Percentage of memory currently in use.
-- `memory.used_bytes`: Total bytes of memory currently in use.
-- `memory.total_bytes`: Total bytes of memory available.
-- `swap.used_pct`: Percentage of swap space currently in use.
-- `swap.used_bytes`: Total bytes of swap space currently in use.
-- `swap.total_bytes`: Total bytes of swap space available.
-- `disk.used_pct`: Percentage of disk space currently in use (root disk only).
-- `disk.used_bytes`: Total bytes of disk space currently in use (root disk only).
-- `disk.total_bytes`: Total bytes of disk space available (root disk only).
-
-Metrics will have the following scope attributes set:
-
-- `host.name`: the configured `HOST` or hostname
-- `service.name`: always `composer`
-
-## Comparison to prior art
-
-Compared to `ofelia` and `reddec/compose-scheduler`, the novel approach taken here is to leverage the Docker CLI itself to parse a compose configuration.  This allows us to use the simple labeling scheme without the shortcomings of only liaising with the Docker daemon.  This allows us to pick up compose file changes on the fly, run scheduled tasks that haven't been run for a first time, and restart compose services as if the host itself were restarting them.
+- [docs/install.md](docs/install.md) — Detailed installation and deployment guide
+- [docs/aliases.md](docs/aliases.md) — Shell alias reference
+- [docs/docker.md](docs/docker.md) — Container-based setup (legacy)
