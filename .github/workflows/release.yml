@@ -10,16 +10,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             artifact: composer-linux-amd64
-            os: ubuntu-latest
+            os: depot-ubuntu-24.04
           - target: aarch64-unknown-linux-musl
             artifact: composer-linux-arm64
-            os: ubuntu-24.04-arm
+            os: depot-ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             artifact: composer-darwin-amd64
-            os: macos-13
+            os: depot-macos-15
           - target: aarch64-apple-darwin
             artifact: composer-darwin-arm64
-            os: macos-latest
+            os: depot-macos-15
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
