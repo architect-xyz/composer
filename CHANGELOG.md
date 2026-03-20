@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.6](https://github.com/architect-xyz/composer/compare/v0.10.5...v0.10.6) (2026-03-20)
+
+
+### Features
+
+* add `composer install uninstall` and update install.sh ([b05f606](https://github.com/architect-xyz/composer/commit/b05f606ab1b5cadf8e4f02dbb6e744bc107c557a))
+* add install.sh for one-line binary installation ([e5c4b06](https://github.com/architect-xyz/composer/commit/e5c4b06e642b6b3fbe281835bbff15e0a6f49131))
+* add top-level `composer uninstall` and `composer update` commands ([306b9b0](https://github.com/architect-xyz/composer/commit/306b9b04023d0c4d4bb6b7750cb49a3cc1b91035))
+
 ## [0.10.5](https://github.com/architect-xyz/composer/compare/v0.10.4...v0.10.5) (2026-03-20)
 
 
