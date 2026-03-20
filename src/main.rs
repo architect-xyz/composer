@@ -31,9 +31,11 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    // CR alee: try [docker-]compose.{yml,yaml}
-    #[clap(short = 'f', default_value = "compose.yml")]
-    compose_file: PathBuf,
+    /// Compose file path. If not specified, auto-detects compose.yml,
+    /// compose.yaml, docker-compose.yml, or docker-compose.yaml in the
+    /// current directory.
+    #[clap(short = 'f')]
+    compose_file: Option<PathBuf>,
     /// Specify the environment file to use for docker compose commands.
     #[clap(long)]
     env_file: Option<PathBuf>,
@@ -106,6 +108,35 @@ enum Commands {
     Install(install_commands::InstallCommands),
 }
 
+const COMPOSE_FILE_CANDIDATES: &[&str] = &[
+    "compose.yml",
+    "compose.yaml",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+];
+
+fn resolve_compose_file(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = explicit {
+        return Ok(path);
+    }
+    let found: Vec<PathBuf> = COMPOSE_FILE_CANDIDATES
+        .iter()
+        .map(PathBuf::from)
+        .filter(|p| p.exists())
+        .collect();
+    match found.len() {
+        0 => bail!("No compose.yml or docker-compose.yml found in the current directory."),
+        1 => Ok(found.into_iter().next().unwrap()),
+        _ => {
+            let options: Vec<String> = found.iter().map(|p| p.display().to_string()).collect();
+            let choice = inquire::Select::new("Multiple compose files found:", options)
+                .prompt()
+                .context("failed to select compose file")?;
+            Ok(PathBuf::from(choice))
+        }
+    }
+}
+
 const RUN_KEY: &str = "co.architect.composer.run";
 const RESTART_KEY: &str = "co.architect.composer.restart";
 
@@ -154,8 +185,9 @@ async fn main() -> Result<()> {
                 }
             }
             Commands::Status => {
+                let compose_file = resolve_compose_file(args.compose_file)?;
                 let context = ComposeContext {
-                    compose_file: args.compose_file.to_owned(),
+                    compose_file,
                     env_file: args.env_file.map(|f| f.to_owned()),
                     project_directory: args.project_directory.clone(),
                     hostname,
@@ -194,7 +226,7 @@ async fn main() -> Result<()> {
     let prune_images = args.prune_images.clone();
     let container_monitor =
         args.container_monitor.is_some_and(|v| v == "true" || v == "1");
-    let compose_file = std::fs::canonicalize(args.compose_file)?;
+    let compose_file = std::fs::canonicalize(resolve_compose_file(args.compose_file)?)?;
     let context = ComposeContext {
         compose_file,
         env_file: args.env_file.map(|f| f.to_owned()),
