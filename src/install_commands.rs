@@ -5,8 +5,10 @@ use std::{env, fs, path::PathBuf, process::Command};
 
 #[derive(Subcommand)]
 pub enum InstallCommands {
-    /// Install bash aliases to ~/.bashrc.d/composer.bash
+    /// Install shell aliases to ~/.bashrc.d/composer.bash
     Bash,
+    /// Install shell aliases to ~/.zshrc.d/composer.zsh
+    Zsh,
     /// Install and enable a systemd service unit
     Systemd {
         /// User to run as (default: current user)
@@ -40,7 +42,8 @@ pub enum InstallCommands {
 
 pub fn install(command: InstallCommands) -> Result<()> {
     match command {
-        InstallCommands::Bash => install_bash(),
+        InstallCommands::Bash => install_shell_aliases("bash", ".bashrc.d", "composer.bash"),
+        InstallCommands::Zsh => install_shell_aliases("zsh", ".zshrc.d", "composer.zsh"),
         InstallCommands::Status => install_status(),
         InstallCommands::Systemd {
             user,
@@ -56,30 +59,28 @@ pub fn install(command: InstallCommands) -> Result<()> {
     }
 }
 
-fn install_bash() -> Result<()> {
+fn install_shell_aliases(shell: &str, dir_name: &str, file_name: &str) -> Result<()> {
     const ALIASES_CONTENT: &str = include_str!("aliases.bash");
 
     let home = env::var("HOME").context("HOME environment variable not set")?;
-    let bashrc_d = PathBuf::from(&home).join(".bashrc.d");
-    let target_file = bashrc_d.join("composer.bash");
+    let dir = PathBuf::from(&home).join(dir_name);
+    let target_file = dir.join(file_name);
 
-    info!("installing bash aliases to {}", target_file.display());
+    info!("installing {shell} aliases to {}", target_file.display());
 
-    // Create .bashrc.d directory if it doesn't exist
-    if !bashrc_d.exists() {
-        info!("creating directory: {}", bashrc_d.display());
-        fs::create_dir_all(&bashrc_d).with_context(|| {
-            format!("failed to create directory: {}", bashrc_d.display())
+    if !dir.exists() {
+        info!("creating directory: {}", dir.display());
+        fs::create_dir_all(&dir).with_context(|| {
+            format!("failed to create directory: {}", dir.display())
         })?;
     }
 
-    // Write the aliases file
     fs::write(&target_file, ALIASES_CONTENT).with_context(|| {
         format!("failed to write file: {}", target_file.display())
     })?;
 
-    info!("successfully installed bash aliases to {}", target_file.display());
-    println!("Installed aliases to ~/.bashrc.d/composer.bash");
+    info!("successfully installed {shell} aliases to {}", target_file.display());
+    println!("Installed aliases to ~/{dir_name}/{file_name}");
 
     Ok(())
 }
@@ -91,13 +92,19 @@ fn install_status() -> Result<()> {
     println!("composer v{version}");
     println!("  binary: {}", exe.display());
 
-    // Bash aliases
+    // Shell aliases
     let home = env::var("HOME").unwrap_or_default();
     let bash_aliases = PathBuf::from(&home).join(".bashrc.d/composer.bash");
+    let zsh_aliases = PathBuf::from(&home).join(".zshrc.d/composer.zsh");
     if bash_aliases.exists() {
         println!("  bash aliases: {}", bash_aliases.display());
     } else {
         println!("  bash aliases: not installed");
+    }
+    if zsh_aliases.exists() {
+        println!("  zsh aliases: {}", zsh_aliases.display());
+    } else {
+        println!("  zsh aliases: not installed");
     }
 
     // Platform-specific service status
