@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use log::info;
-use std::{env, fs, path::PathBuf};
+use std::{env, fs, path::PathBuf, process::Command};
 
 #[derive(Subcommand)]
 pub enum InstallCommands {
@@ -22,6 +22,8 @@ pub enum InstallCommands {
         #[clap(long)]
         env: Vec<String>,
     },
+    /// Show installation status
+    Status,
     /// Install a macOS launchd plist for running composer as a daemon
     Launchd {
         /// Working directory (default: current directory)
@@ -39,6 +41,7 @@ pub enum InstallCommands {
 pub fn install(command: InstallCommands) -> Result<()> {
     match command {
         InstallCommands::Bash => install_bash(),
+        InstallCommands::Status => install_status(),
         InstallCommands::Systemd {
             user,
             working_dir,
@@ -79,6 +82,122 @@ fn install_bash() -> Result<()> {
     println!("Installed aliases to ~/.bashrc.d/composer.bash");
 
     Ok(())
+}
+
+fn install_status() -> Result<()> {
+    // Binary info
+    let exe = env::current_exe().context("failed to get current executable path")?;
+    let version = env!("CARGO_PKG_VERSION");
+    println!("composer v{version}");
+    println!("  binary: {}", exe.display());
+
+    // Bash aliases
+    let home = env::var("HOME").unwrap_or_default();
+    let bash_aliases = PathBuf::from(&home).join(".bashrc.d/composer.bash");
+    if bash_aliases.exists() {
+        println!("  bash aliases: {}", bash_aliases.display());
+    } else {
+        println!("  bash aliases: not installed");
+    }
+
+    // Platform-specific service status
+    if cfg!(target_os = "linux") {
+        print_systemd_status();
+    } else if cfg!(target_os = "macos") {
+        print_launchd_status(&home);
+    }
+
+    Ok(())
+}
+
+fn print_systemd_status() {
+    let unit_path = PathBuf::from("/etc/systemd/system/composer.service");
+    if !unit_path.exists() {
+        println!("  systemd: not installed");
+        return;
+    }
+    println!("  systemd: {}", unit_path.display());
+
+    // Parse key fields from the unit file
+    if let Ok(contents) = fs::read_to_string(&unit_path) {
+        for line in contents.lines() {
+            let line = line.trim();
+            if let Some(val) = line.strip_prefix("User=") {
+                println!("    user: {val}");
+            } else if let Some(val) = line.strip_prefix("WorkingDirectory=") {
+                println!("    working dir: {val}");
+            } else if let Some(val) = line.strip_prefix("ExecStart=") {
+                println!("    exec: {val}");
+            } else if let Some(val) = line.strip_prefix("Environment=") {
+                if val != "RUST_LOG=composer=info" {
+                    println!("    env: {val}");
+                }
+            }
+        }
+    }
+
+    // Check service state via systemctl
+    if let Ok(output) = Command::new("systemctl")
+        .args(["is-active", "composer"])
+        .output()
+    {
+        let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let enabled = Command::new("systemctl")
+            .args(["is-enabled", "composer"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        println!("    state: {state}, {enabled}");
+    }
+}
+
+fn print_launchd_status(home: &str) {
+    let plist_path =
+        PathBuf::from(home).join("Library/LaunchAgents/com.architect.composer.plist");
+    if !plist_path.exists() {
+        println!("  launchd: not installed");
+        return;
+    }
+    println!("  launchd: {}", plist_path.display());
+
+    // Parse key fields from the plist (just grep for the values after known keys)
+    if let Ok(contents) = fs::read_to_string(&plist_path) {
+        let lines: Vec<&str> = contents.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if trimmed == "<key>WorkingDirectory</key>" {
+                if let Some(next) = lines.get(i + 1) {
+                    if let Some(val) = extract_plist_string(next) {
+                        println!("    working dir: {val}");
+                    }
+                }
+            }
+        }
+    }
+
+    // Check service state via launchctl
+    if let Ok(output) = Command::new("launchctl")
+        .args(["list", "com.architect.composer"])
+        .output()
+    {
+        if output.status.success() {
+            // Parse PID from launchctl list output (format: PID\tStatus\tLabel)
+            let out = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<&str> = out.lines().last().unwrap_or("").split('\t').collect();
+            match parts.first().copied() {
+                Some("-") => println!("    state: not running"),
+                Some(pid) if !pid.is_empty() => println!("    state: running (pid {pid})"),
+                _ => println!("    state: loaded"),
+            }
+        } else {
+            println!("    state: not loaded");
+        }
+    }
+}
+
+fn extract_plist_string(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    trimmed.strip_prefix("<string>")?.strip_suffix("</string>")
 }
 
 fn install_systemd(
