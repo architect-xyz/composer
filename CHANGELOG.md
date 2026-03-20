@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/architect-xyz/composer/compare/v0.10.4...v0.10.5) (2026-03-20)
+
+
+### Bug Fixes
+
+* **ci:** fix musl OpenSSL and macos-13 runner issues ([50d46ce](https://github.com/architect-xyz/composer/commit/50d46ce4862d2b1f9cd79a846102845acb0ea582))
+
 ## [0.10.4](https://github.com/architect-xyz/composer/compare/v0.10.3...v0.10.4) (2026-03-20)
 
 
