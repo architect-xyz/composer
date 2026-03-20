@@ -35,7 +35,7 @@ pem = "3"
 prettytable-rs = { package = "prettytable-rs", version = "0.10", features = [
     "win_crlf",
 ] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9.33"
