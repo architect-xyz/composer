@@ -26,6 +26,8 @@ pub enum InstallCommands {
     },
     /// Show installation status
     Status,
+    /// Remove all installed components (aliases, service, binary)
+    Uninstall,
     /// Install a macOS launchd plist for running composer as a daemon
     Launchd {
         /// Working directory (default: current directory)
@@ -45,6 +47,7 @@ pub fn install(command: InstallCommands) -> Result<()> {
         InstallCommands::Bash => install_shell_aliases("bash", ".bashrc.d", "composer.bash"),
         InstallCommands::Zsh => install_shell_aliases("zsh", ".zshrc.d", "composer.zsh"),
         InstallCommands::Status => install_status(),
+        InstallCommands::Uninstall => uninstall(),
         InstallCommands::Systemd {
             user,
             working_dir,
@@ -112,6 +115,66 @@ fn install_status() -> Result<()> {
         print_systemd_status();
     } else if cfg!(target_os = "macos") {
         print_launchd_status(&home);
+    }
+
+    Ok(())
+}
+
+fn uninstall() -> Result<()> {
+    let home = env::var("HOME").unwrap_or_default();
+    let mut removed = vec![];
+
+    // Stop and remove systemd service
+    let unit_path = PathBuf::from("/etc/systemd/system/composer.service");
+    if unit_path.exists() {
+        let _ = Command::new("systemctl")
+            .args(["stop", "composer"])
+            .status();
+        let _ = Command::new("systemctl")
+            .args(["disable", "composer"])
+            .status();
+        if fs::remove_file(&unit_path).is_ok() {
+            let _ = Command::new("systemctl")
+                .arg("daemon-reload")
+                .status();
+            removed.push(format!("systemd unit: {}", unit_path.display()));
+        }
+    }
+
+    // Unload and remove launchd plist
+    let plist_path =
+        PathBuf::from(&home).join("Library/LaunchAgents/com.architect.composer.plist");
+    if plist_path.exists() {
+        let _ = Command::new("launchctl")
+            .args(["unload", &plist_path.to_string_lossy()])
+            .status();
+        if fs::remove_file(&plist_path).is_ok() {
+            removed.push(format!("launchd plist: {}", plist_path.display()));
+        }
+    }
+
+    // Remove shell aliases
+    for (name, path) in [
+        ("bash aliases", PathBuf::from(&home).join(".bashrc.d/composer.bash")),
+        ("zsh aliases", PathBuf::from(&home).join(".zshrc.d/composer.zsh")),
+    ] {
+        if path.exists() {
+            if fs::remove_file(&path).is_ok() {
+                removed.push(format!("{name}: {}", path.display()));
+            }
+        }
+    }
+
+    if removed.is_empty() {
+        println!("Nothing to uninstall.");
+    } else {
+        for item in &removed {
+            println!("Removed {item}");
+        }
+        // Don't remove the binary since we're running from it
+        let exe = env::current_exe().context("failed to get current executable path")?;
+        println!("\nTo complete uninstall, remove the binary:");
+        println!("  sudo rm {}", exe.display());
     }
 
     Ok(())
