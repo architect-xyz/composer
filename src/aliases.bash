@@ -25,8 +25,8 @@ _parse_flags() {
 status() {
     if [ -z "$1" ]; then
         curl -sf http://localhost:10080/status.txt 2>/dev/null && return 0
-        echo "composer status endpoint not available"
-        return 1
+        command -v composer >/dev/null 2>&1 && composer status && return 0
+        _dc ps
     else
         _dc ps "$1"
     fi
