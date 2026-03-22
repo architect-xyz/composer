@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.9](https://github.com/architect-xyz/composer/compare/v0.10.8...v0.10.9) (2026-03-22)
+
+
+### Bug Fixes
+
+* download to temp file in composer update ([3137db8](https://github.com/architect-xyz/composer/commit/3137db8a14c09b0d390a9786eef4d201bd229e7c))
+
 ## [0.10.8](https://github.com/architect-xyz/composer/compare/v0.10.7...v0.10.8) (2026-03-22)
 
 
