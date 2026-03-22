@@ -2,46 +2,77 @@
   <img src="LOGO.png" alt="composer logo" width="33%" />
 </p>
 
-# composer
+<h3 align="center">Cron for Docker Compose</h3>
 
-A Docker Compose scheduler that runs or restarts services on cron schedules.
+<p align="center">
+  Schedule any Docker Compose service to run or restart on a cron schedule —<br>
+  no crontab editing, no wrapper scripts, just labels.
+</p>
 
-Composer reads labels from your `compose.yml` services and schedules them
-using Quartz-compatible cron expressions. It also provides host monitoring,
-Slack notifications, certificate monitoring, and automatic Docker image pruning.
+<p align="center">
+  <a href="https://github.com/architect-xyz/composer/releases/latest"><img src="https://img.shields.io/github/v/release/architect-xyz/composer" alt="Latest Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/architect-xyz/composer" alt="License: MIT"></a>
+  <a href="https://hub.docker.com/r/afintech/composer"><img src="https://img.shields.io/docker/pulls/afintech/composer" alt="Docker Pulls"></a>
+</p>
+
+---
+
+```yaml
+# Just add a label to your compose service:
+services:
+  backup:
+    image: my-backup:latest
+    labels:
+      - "co.architect.composer.run=0 0 2 * * *"   # runs every day at 2 AM
+```
+
+```bash
+# Install and start:
+curl -fsSL https://raw.githubusercontent.com/architect-xyz/composer/main/install.sh | sh
+composer install systemd   # or: composer install launchd
+```
+
+That's it. Composer watches your `compose.yml`, picks up labeled services, and runs them on schedule.
+
+---
+
+## Why Composer?
+
+**The problem:** You need to run Docker Compose services on a schedule — nightly backups, periodic ETL jobs, service restarts. The usual options are:
+
+- **Crontab + shell scripts** — works, but cron entries are disconnected from your compose file. They drift, break silently, and don't travel with your project.
+- **Kubernetes CronJobs** — great if you're on Kubernetes. Overkill if you're running Docker Compose on a single server or small cluster.
+- **Other schedulers** (Ofelia, Swarm, etc.) — often require running as a privileged container with Docker socket access, complex volume mounts, or a separate config file.
 
 ## Installation
 
-### Binary (recommended)
+### One-line install 
 
-Download the latest release for your platform:
+```bash
+curl -fsSL https://raw.githubusercontent.com/architect-xyz/composer/main/install.sh | sh
+```
+
+### Manual binary download
 
 ```bash
 # Linux (amd64)
-curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-linux-amd64 \
-  -o /usr/local/bin/composer
-chmod +x /usr/local/bin/composer
+curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-linux-amd64 \
+  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
 
 # Linux (arm64)
-curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-linux-arm64 \
-  -o /usr/local/bin/composer
-chmod +x /usr/local/bin/composer
+curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-linux-arm64 \
+  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
 
 # macOS (Apple Silicon)
-curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-darwin-arm64 \
-  -o /usr/local/bin/composer
-chmod +x /usr/local/bin/composer
+curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-darwin-arm64 \
+  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
 
 # macOS (Intel)
-curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-darwin-amd64 \
-  -o /usr/local/bin/composer
-chmod +x /usr/local/bin/composer
+curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-darwin-amd64 \
+  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
 ```
 
 ### Docker
-
-Composer can also run as a Docker Compose service, which requires no host
-installation:
 
 ```bash
 docker pull afintech/composer:latest
