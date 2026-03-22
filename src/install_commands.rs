@@ -200,21 +200,27 @@ pub fn update() -> Result<()> {
         "https://github.com/architect-xyz/composer/releases/latest/download/{artifact}"
     );
 
+    let tmp = exe.with_extension("tmp");
+
     println!("Downloading {artifact}...");
     let status = Command::new("curl")
-        .args(["-fsSL", &url, "-o", &exe.to_string_lossy()])
+        .args(["-fsSL", &url, "-o", &tmp.to_string_lossy()])
         .status()
         .context("failed to run curl")?;
     if !status.success() {
+        let _ = fs::remove_file(&tmp);
         anyhow::bail!("download failed");
     }
 
-    // Ensure executable
+    // Ensure executable, then replace the running binary
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&exe, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
     }
+    fs::rename(&tmp, &exe).with_context(|| {
+        format!("failed to replace {} (are you running as root?)", exe.display())
+    })?;
 
     println!("Updated composer at {}", exe.display());
 
