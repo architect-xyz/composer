@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.8](https://github.com/architect-xyz/composer/compare/v0.10.7...v0.10.8) (2026-03-22)
+
+
+### Bug Fixes
+
+* status falls back to composer CLI then docker compose ps ([147c837](https://github.com/architect-xyz/composer/commit/147c837839a417df1461759ec52ce8bb0f2dae2d))
+
 ## [0.10.7](https://github.com/architect-xyz/composer/compare/v0.10.6...v0.10.7) (2026-03-22)
 
 
