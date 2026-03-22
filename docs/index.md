@@ -1,9 +1,3 @@
----
-layout: default
-title: Home
-nav_order: 1
----
-
 <p align="center">
   <img src="LOGO.png" alt="composer logo" width="33%" />
 </p>
