@@ -1,3 +1,9 @@
+---
+layout: default
+title: Shell Aliases
+nav_order: 3
+---
+
 # Shell aliases reference
 
 Composer ships a canonical set of shell aliases for common Docker Compose

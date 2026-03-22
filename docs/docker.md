@@ -1,3 +1,9 @@
+---
+layout: default
+title: Docker Setup
+nav_order: 4
+---
+
 # Docker-based setup
 
 Composer can run as a Docker Compose service alongside your other services.
