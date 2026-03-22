@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.7](https://github.com/architect-xyz/composer/compare/v0.10.6...v0.10.7) (2026-03-22)
+
+
+### Features
+
+* improve install defaults — use SUDO_USER, CWD, and confirm ([5a5fd23](https://github.com/architect-xyz/composer/commit/5a5fd23f4dcf25f340a7206d00dde0024d13f5cc))
+
 ## [0.10.6](https://github.com/architect-xyz/composer/compare/v0.10.5...v0.10.6) (2026-03-20)
 
 
