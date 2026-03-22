@@ -3,8 +3,6 @@ description: Cron for Docker Compose
 remote_theme: just-the-docs/just-the-docs
 color_scheme: light
 include: [".well-known"]
-plugins:
-  - jekyll-remote-theme
 
 url: https://architect-xyz.github.io
 baseurl: /composer
