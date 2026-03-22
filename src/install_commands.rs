@@ -11,10 +11,10 @@ pub enum InstallCommands {
     Zsh,
     /// Install and enable a systemd service unit
     Systemd {
-        /// User to run as (default: current user)
-        #[clap(long, default_value_t = whoami::username())]
+        /// User to run as (default: SUDO_USER or current user)
+        #[clap(long, default_value_t = default_user())]
         user: String,
-        /// Working directory (default: user's home)
+        /// Working directory (default: current directory)
         #[clap(long)]
         working_dir: Option<String>,
         /// Compose file path relative to working dir (default: compose.yml)
@@ -38,6 +38,10 @@ pub enum InstallCommands {
         #[clap(long)]
         env: Vec<String>,
     },
+}
+
+fn default_user() -> String {
+    env::var("SUDO_USER").unwrap_or_else(|_| whoami::username())
 }
 
 pub fn install(command: InstallCommands) -> Result<()> {
@@ -318,11 +322,10 @@ fn install_systemd(
 ) -> Result<()> {
     let working_dir = match working_dir {
         Some(dir) => dir,
-        None => {
-            // Default to user's home directory
-            let home = home_dir_for_user(user)?;
-            home.to_string_lossy().to_string()
-        }
+        None => env::current_dir()
+            .context("failed to get current directory")?
+            .to_string_lossy()
+            .to_string(),
     };
 
     let composer_bin = env::current_exe()
@@ -335,6 +338,22 @@ fn install_systemd(
         env_lines.push(format!("Environment={kv}"));
     }
     let env_section = env_lines.join("\n");
+
+    println!("Installing systemd service:");
+    println!("  user: {user}");
+    println!("  working dir: {working_dir}");
+    println!("  compose file: {compose_file}");
+    for kv in extra_env {
+        println!("  env: {kv}");
+    }
+    let confirm = inquire::Confirm::new("Proceed?")
+        .with_default(true)
+        .prompt()
+        .context("failed to read confirmation")?;
+    if !confirm {
+        println!("Aborted.");
+        return Ok(());
+    }
 
     let unit = format!(
         "\
@@ -399,6 +418,21 @@ fn install_launchd(
         .to_string_lossy()
         .to_string();
 
+    println!("Installing launchd service:");
+    println!("  working dir: {working_dir}");
+    println!("  compose file: {compose_file}");
+    for kv in extra_env {
+        println!("  env: {kv}");
+    }
+    let confirm = inquire::Confirm::new("Proceed?")
+        .with_default(true)
+        .prompt()
+        .context("failed to read confirmation")?;
+    if !confirm {
+        println!("Aborted.");
+        return Ok(());
+    }
+
     let env_dict = if extra_env.is_empty() {
         String::new()
     } else {
@@ -462,17 +496,6 @@ fn install_launchd(
     println!("Run `launchctl load {}` to start the service.", plist_path.display());
 
     Ok(())
-}
-
-fn home_dir_for_user(user: &str) -> Result<PathBuf> {
-    // Try current user's HOME first
-    if user == whoami::username() {
-        if let Ok(home) = env::var("HOME") {
-            return Ok(PathBuf::from(home));
-        }
-    }
-    // Fall back to /home/<user>
-    Ok(PathBuf::from(format!("/home/{user}")))
 }
 
 fn xml_escape(s: &str) -> String {
