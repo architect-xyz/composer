@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.10](https://github.com/architect-xyz/composer/compare/v0.10.9...v0.10.10) (2026-04-08)
+
+
+### Features
+
+* add GitHub Pages site with skill.md for AI agents ([5cc36a8](https://github.com/architect-xyz/composer/commit/5cc36a8b7461bb488afa5043e41d170a5b68dc23))
+* add just-the-docs theme with auto light/dark mode ([27aa8fc](https://github.com/architect-xyz/composer/commit/27aa8fce6b108f46334e77b46b240c6b75db0158))
+
+
+### Bug Fixes
+
+* add Gemfile and jekyll-remote-theme plugin for GitHub Pages ([da52b48](https://github.com/architect-xyz/composer/commit/da52b480a54cf6012dd356d21056af09164daf36))
+* install to ~/.local/bin by default so sudo is not required ([#37](https://github.com/architect-xyz/composer/issues/37)) ([2fcdc72](https://github.com/architect-xyz/composer/commit/2fcdc72e3c550903f42aaf63fc9ad98649b0dfa5))
+
 ## [0.10.9](https://github.com/architect-xyz/composer/compare/v0.10.8...v0.10.9) (2026-03-22)
 
 
