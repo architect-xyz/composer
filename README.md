@@ -29,6 +29,7 @@ services:
 ```bash
 # Install and start:
 curl -fsSL https://raw.githubusercontent.com/architect-xyz/composer/main/install.sh | sh
+composer install bash      # shell aliases for common docker compose commands
 composer install systemd   # or: composer install launchd
 ```
 
@@ -56,21 +57,27 @@ curl -fsSL https://raw.githubusercontent.com/architect-xyz/composer/main/install
 
 ```bash
 # Linux (amd64)
+mkdir -p ~/.local/bin
 curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-linux-amd64 \
-  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
+  -o ~/.local/bin/composer && chmod +x ~/.local/bin/composer
 
 # Linux (arm64)
+mkdir -p ~/.local/bin
 curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-linux-arm64 \
-  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
+  -o ~/.local/bin/composer && chmod +x ~/.local/bin/composer
 
 # macOS (Apple Silicon)
+mkdir -p ~/.local/bin
 curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-darwin-arm64 \
-  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
+  -o ~/.local/bin/composer && chmod +x ~/.local/bin/composer
 
 # macOS (Intel)
+mkdir -p ~/.local/bin
 curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-darwin-amd64 \
-  -o /usr/local/bin/composer && chmod +x /usr/local/bin/composer
+  -o ~/.local/bin/composer && chmod +x ~/.local/bin/composer
 ```
+
+> **Note:** Ensure `~/.local/bin` is in your `PATH`. Add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile if needed. To install system-wide, use `--to /usr/local/bin` with the install script (requires sudo).
 
 ### Docker
 
@@ -83,7 +90,7 @@ See [docs/docker.md](docs/docker.md) for the container-based setup.
 ## Quick start
 
 ```bash
-# Install shell aliases
+# Install shell aliases (shorthand commands for docker compose: up, down, logs, etc.)
 composer install bash   # or: composer install zsh
 
 # Install as a systemd service (Linux)
