@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.11](https://github.com/architect-xyz/composer/compare/v0.10.10...v0.10.11) (2026-04-20)
+
+
+### Features
+
+* **aliases:** add upgrade -a/--all and --with-guards install option ([#38](https://github.com/architect-xyz/composer/issues/38)) ([76bdef5](https://github.com/architect-xyz/composer/commit/76bdef5eab3bcaf670299b135cceaef5d8ebde83))
+
 ## [0.10.10](https://github.com/architect-xyz/composer/compare/v0.10.9...v0.10.10) (2026-04-08)
 
 
