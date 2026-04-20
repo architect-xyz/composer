@@ -6,9 +6,17 @@ use std::{env, fs, path::PathBuf, process::Command};
 #[derive(Subcommand)]
 pub enum InstallCommands {
     /// Install shell aliases to ~/.bashrc.d/composer.bash
-    Bash,
+    Bash {
+        /// Also install guards: shadow `docker` and prompt before destructive ops
+        #[clap(long)]
+        with_guards: bool,
+    },
     /// Install shell aliases to ~/.zshrc.d/composer.zsh
-    Zsh,
+    Zsh {
+        /// Also install guards: shadow `docker` and prompt before destructive ops
+        #[clap(long)]
+        with_guards: bool,
+    },
     /// Install and enable a systemd service unit
     Systemd {
         /// User to run as (default: SUDO_USER or current user)
@@ -46,8 +54,12 @@ fn default_user() -> String {
 
 pub fn install(command: InstallCommands) -> Result<()> {
     match command {
-        InstallCommands::Bash => install_shell_aliases("bash", ".bashrc.d", "composer.bash"),
-        InstallCommands::Zsh => install_shell_aliases("zsh", ".zshrc.d", "composer.zsh"),
+        InstallCommands::Bash { with_guards } => {
+            install_shell_aliases("bash", ".bashrc.d", "composer.bash", with_guards)
+        }
+        InstallCommands::Zsh { with_guards } => {
+            install_shell_aliases("zsh", ".zshrc.d", "composer.zsh", with_guards)
+        }
         InstallCommands::Status => install_status(),
         InstallCommands::Systemd {
             user,
@@ -63,8 +75,14 @@ pub fn install(command: InstallCommands) -> Result<()> {
     }
 }
 
-fn install_shell_aliases(shell: &str, dir_name: &str, file_name: &str) -> Result<()> {
+fn install_shell_aliases(
+    shell: &str,
+    dir_name: &str,
+    file_name: &str,
+    with_guards: bool,
+) -> Result<()> {
     const ALIASES_CONTENT: &str = include_str!("aliases.bash");
+    const GUARDS_CONTENT: &str = include_str!("guards.bash");
 
     let home = env::var("HOME").context("HOME environment variable not set")?;
     let dir = PathBuf::from(&home).join(dir_name);
@@ -79,12 +97,19 @@ fn install_shell_aliases(shell: &str, dir_name: &str, file_name: &str) -> Result
         })?;
     }
 
-    fs::write(&target_file, ALIASES_CONTENT).with_context(|| {
+    let content = if with_guards {
+        format!("{ALIASES_CONTENT}\n{GUARDS_CONTENT}")
+    } else {
+        ALIASES_CONTENT.to_string()
+    };
+
+    fs::write(&target_file, &content).with_context(|| {
         format!("failed to write file: {}", target_file.display())
     })?;
 
     info!("successfully installed {shell} aliases to {}", target_file.display());
-    println!("Installed aliases to ~/{dir_name}/{file_name}");
+    let suffix = if with_guards { " (with guards)" } else { "" };
+    println!("Installed aliases to ~/{dir_name}/{file_name}{suffix}");
 
     Ok(())
 }

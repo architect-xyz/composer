@@ -22,6 +22,24 @@ _parse_flags() {
     done
 }
 
+# Interactive confirmation gate, active only when COMPOSER_GUARDS=1.
+# Optional first arg is a WARN message printed before the prompt.
+_maybe_confirm() {
+    [ "${COMPOSER_GUARDS:-}" = "1" ] || return 0
+    if [ -n "${1:-}" ]; then
+        echo -e "\e[30;103m[ WARN ]\e[0m $1"
+    fi
+    local choice
+    read -p "Continue? [y/N] " choice
+    choice=${choice:-N}
+    if [[ $choice =~ ^[Yy]$ ]]; then
+        return 0
+    else
+        echo "User aborted."
+        return 1
+    fi
+}
+
 status() {
     if [ -z "$1" ]; then
         curl -sf http://localhost:10080/status.txt 2>/dev/null && return 0
@@ -67,6 +85,7 @@ stop() {
         echo "Usage: stop <service>"
         return 1
     fi
+    _maybe_confirm "This will stop $1." || return 1
     _dc "${_PROFILE[@]}" stop "$1"
 }
 
@@ -95,10 +114,12 @@ up() {
 
     if [ "$all" = true ]; then
         echo -e "\e[30;103m[ WARN ]\e[0m This will recreate and upgrade all services if there are any pending image updates."
+        _maybe_confirm || return 1
         _dc "${_PROFILE[@]}" up -d
     elif [ ${#services[@]} -gt 0 ]; then
         echo -e "\e[30;103m[ WARN ]\e[0m This will recreate and upgrade ${services[*]} if there are any pending image updates."
         echo -e "\e[30;103m[ WARN ]\e[0m Use start/stop instead if this isn't the desired behavior."
+        _maybe_confirm || return 1
         _dc "${_PROFILE[@]}" up --remove-orphans -d "${services[@]}"
     else
         echo "Usage: up [--profile <name>] [-a] <service...>"
@@ -123,10 +144,12 @@ down() {
 
     if [ "$all" = true ]; then
         echo -e "\e[30;103m[ WARN ]\e[0m This will stop all services and destroy their containers."
+        _maybe_confirm || return 1
         _dc "${_PROFILE[@]}" down --remove-orphans $volume_flag
     elif [ ${#services[@]} -gt 0 ]; then
         echo -e "\e[30;103m[ WARN ]\e[0m This will stop ${services[*]} and destroy their containers."
         echo -e "\e[30;103m[ WARN ]\e[0m Use start/stop instead if this isn't the desired behavior."
+        _maybe_confirm || return 1
         _dc "${_PROFILE[@]}" down $volume_flag "${services[@]}"
     else
         echo "Usage: down [--profile <name>] [-a] [-v] <service...>"
@@ -139,23 +162,39 @@ upgrade() {
     set -- "${_ARGS[@]}"
 
     local now=false
-    local target=""
+    local all=false
+    local services=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --now) now=true; shift ;;
-            *) target="$1"; shift ;;
+            -a|--all) all=true; shift ;;
+            *) services+=("$1"); shift ;;
         esac
     done
 
-    if [ -z "$target" ]; then
-        echo "Usage: upgrade [--profile <name>] [--now] <service>"
+    if [ "$all" = true ]; then
+        if [ "$now" = true ]; then
+            echo -e "\e[30;103m[ WARN ]\e[0m This will pull, tear down, and recreate all services."
+            _maybe_confirm || return 1
+            _dc "${_PROFILE[@]}" pull
+            _dc "${_PROFILE[@]}" down --remove-orphans
+            _dc "${_PROFILE[@]}" up --remove-orphans -d
+        else
+            _dc "${_PROFILE[@]}" pull
+        fi
+    elif [ ${#services[@]} -gt 0 ]; then
+        if [ "$now" = true ]; then
+            echo -e "\e[30;103m[ WARN ]\e[0m This will pull, tear down, and recreate ${services[*]}."
+            _maybe_confirm || return 1
+            _dc "${_PROFILE[@]}" pull "${services[@]}"
+            _dc "${_PROFILE[@]}" down "${services[@]}"
+            _dc "${_PROFILE[@]}" up --remove-orphans -d "${services[@]}"
+        else
+            _dc "${_PROFILE[@]}" pull "${services[@]}"
+        fi
+    else
+        echo "Usage: upgrade [--profile <name>] [-a] [--now] <service...>"
         return 1
-    fi
-
-    _dc "${_PROFILE[@]}" pull "$target"
-    if [ "$now" = true ]; then
-        _dc "${_PROFILE[@]}" down "$target"
-        _dc "${_PROFILE[@]}" up --remove-orphans -d "$target"
     fi
 }
 
@@ -185,6 +224,6 @@ exec() {
 printf '\nAvailable commands:\n'
 printf '  \033[32mInspect ──\033[0m status [svc] \033[32m·\033[0m logs [-n lines] <svc>\n'
 printf '  \033[32mControl ──\033[0m start|stop|restart <svc>\n'
-printf '  \033[32mDeploy  ──\033[0m up|down [-a] [-v] <svc...> \033[32m·\033[0m upgrade [--now] <svc>\n'
+printf '  \033[32mDeploy  ──\033[0m up|down [-a] [-v] <svc...> \033[32m·\033[0m upgrade [-a] [--now] <svc...>\n'
 printf '  \033[32mExec    ──\033[0m run <svc> [args] \033[32m·\033[0m exec <svc> [args]\n'
 printf '  \033[90mAll commands accept --profile <name>\033[0m\n\n'
