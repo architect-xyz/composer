@@ -220,10 +220,14 @@ exec() {
     _dc "${_PROFILE[@]}" exec "$svc" "$@"
 }
 
-# Print help on source
-printf '\nAvailable commands:\n'
-printf '  \033[32mInspect ──\033[0m status [svc] \033[32m·\033[0m logs [-n lines] <svc>\n'
-printf '  \033[32mControl ──\033[0m start|stop|restart <svc>\n'
-printf '  \033[32mDeploy  ──\033[0m up|down [-a] [-v] <svc...> \033[32m·\033[0m upgrade [-a] [--now] <svc...>\n'
-printf '  \033[32mExec    ──\033[0m run <svc> [args] \033[32m·\033[0m exec <svc> [args]\n'
-printf '  \033[90mAll commands accept --profile <name>\033[0m\n\n'
+# Print help on source (interactive shells only)
+case $- in
+    *i*)
+        printf '\nAvailable commands:\n'
+        printf '  \033[32mInspect ──\033[0m status [svc] \033[32m·\033[0m logs [-n lines] <svc>\n'
+        printf '  \033[32mControl ──\033[0m start|stop|restart <svc>\n'
+        printf '  \033[32mDeploy  ──\033[0m up|down [-a] [-v] <svc...> \033[32m·\033[0m upgrade [-a] [--now] <svc...>\n'
+        printf '  \033[32mExec    ──\033[0m run <svc> [args] \033[32m·\033[0m exec <svc> [args]\n'
+        printf '  \033[90mAll commands accept --profile <name>\033[0m\n\n'
+        ;;
+esac
