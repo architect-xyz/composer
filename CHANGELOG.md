@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.12](https://github.com/architect-xyz/composer/compare/v0.10.11...v0.10.12) (2026-04-21)
+
+
+### Bug Fixes
+
+* **aliases:** guard banner against non-interactive shells ([6392939](https://github.com/architect-xyz/composer/commit/63929398cffdef4ce4b5ce3cb0e2e74b1fd5485a))
+
 ## [0.10.11](https://github.com/architect-xyz/composer/compare/v0.10.10...v0.10.11) (2026-04-20)
 
 
