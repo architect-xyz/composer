@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.13](https://github.com/architect-xyz/composer/compare/v0.10.12...v0.10.13) (2026-04-29)
+
+
+### Features
+
+* **install:** default to /usr/local/bin with sudo, add --local flag ([93621fa](https://github.com/architect-xyz/composer/commit/93621fa58075e1bb1537b87f23bd45144a7a66e1))
+
 ## [0.10.12](https://github.com/architect-xyz/composer/compare/v0.10.11...v0.10.12) (2026-04-21)
 
 
