@@ -31,6 +31,9 @@ pub enum InstallCommands {
         /// Extra environment variables (KEY=VALUE), repeatable
         #[clap(long)]
         env: Vec<String>,
+        /// Skip `systemctl enable --now composer` after writing the unit
+        #[clap(long)]
+        no_enable: bool,
     },
     /// Show installation status
     Status,
@@ -66,7 +69,8 @@ pub fn install(command: InstallCommands) -> Result<()> {
             working_dir,
             compose_file,
             env,
-        } => install_systemd(&user, working_dir, &compose_file, &env),
+            no_enable,
+        } => install_systemd(&user, working_dir, &compose_file, &env, !no_enable),
         InstallCommands::Launchd {
             working_dir,
             compose_file,
@@ -350,6 +354,7 @@ fn install_systemd(
     working_dir: Option<String>,
     compose_file: &str,
     extra_env: &[String],
+    enable: bool,
 ) -> Result<()> {
     let working_dir = match working_dir {
         Some(dir) => dir,
@@ -377,6 +382,10 @@ fn install_systemd(
     for kv in extra_env {
         println!("  env: {kv}");
     }
+    println!(
+        "  enable+start: {}",
+        if enable { "yes" } else { "no (--no-enable)" }
+    );
     let confirm = inquire::Confirm::new("Proceed?")
         .with_default(true)
         .prompt()
@@ -426,7 +435,21 @@ WantedBy=multi-user.target
     }
 
     println!("Installed systemd unit to {}", unit_path.display());
-    println!("Run `systemctl enable --now composer` to start the service.");
+
+    if enable {
+        info!("enabling and starting composer service");
+        let status = std::process::Command::new("systemctl")
+            .args(["enable", "--now", "composer"])
+            .status()
+            .context("failed to run systemctl enable --now composer")?;
+        if !status.success() {
+            anyhow::bail!("systemctl enable --now composer failed with status {status}");
+        }
+        println!("Enabled and started composer.service");
+        println!("Check status with `systemctl status composer` or `composer install status`.");
+    } else {
+        println!("Run `systemctl enable --now composer` to start the service.");
+    }
 
     Ok(())
 }
