@@ -112,12 +112,8 @@ enum Commands {
     Update,
 }
 
-const COMPOSE_FILE_CANDIDATES: &[&str] = &[
-    "compose.yml",
-    "compose.yaml",
-    "docker-compose.yml",
-    "docker-compose.yaml",
-];
+const COMPOSE_FILE_CANDIDATES: &[&str] =
+    &["compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"];
 
 fn resolve_compose_file(explicit: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(path) = explicit {
@@ -129,10 +125,13 @@ fn resolve_compose_file(explicit: Option<PathBuf>) -> Result<PathBuf> {
         .filter(|p| p.exists())
         .collect();
     match found.len() {
-        0 => bail!("No compose.yml or docker-compose.yml found in the current directory."),
+        0 => {
+            bail!("No compose.yml or docker-compose.yml found in the current directory.")
+        }
         1 => Ok(found.into_iter().next().unwrap()),
         _ => {
-            let options: Vec<String> = found.iter().map(|p| p.display().to_string()).collect();
+            let options: Vec<String> =
+                found.iter().map(|p| p.display().to_string()).collect();
             let choice = inquire::Select::new("Multiple compose files found:", options)
                 .prompt()
                 .context("failed to select compose file")?;
