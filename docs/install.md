@@ -61,6 +61,20 @@ composer install status
 | `--working-dir` | User's home directory | Working directory (where compose.yml lives) |
 | `--compose-file` | `compose.yml` | Compose file path relative to working dir |
 | `--env` | — | Extra environment variables (repeatable, `KEY=VALUE`) |
+| `-y`, `--yes` | — | Skip the confirmation prompt (for non-interactive use) |
+
+### Non-interactive installs
+
+The install prompts for confirmation, which requires a TTY. For cloud-init
+user data, SSM Run Command, CI, or any other unattended provisioning, pass
+`--yes`:
+
+```bash
+sudo composer install systemd --user ec2-user --working-dir /home/ec2-user --yes
+```
+
+Without a TTY and without `--yes`, the command exits with an error rather
+than hanging.
 
 ### Generated unit file
 
@@ -118,6 +132,7 @@ launchctl load ~/Library/LaunchAgents/com.architect.composer.plist
 | `--working-dir` | Current directory | Working directory |
 | `--compose-file` | `compose.yml` | Compose file path relative to working dir |
 | `--env` | — | Extra environment variables (repeatable, `KEY=VALUE`) |
+| `-y`, `--yes` | — | Skip the confirmation prompt (for non-interactive use) |
 
 Logs go to `/tmp/composer.log` and `/tmp/composer.err`.
 

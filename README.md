@@ -97,6 +97,9 @@ composer install bash   # or: composer install zsh
 sudo composer install systemd --user ec2-user --working-dir /home/ec2-user
 sudo systemctl enable --now composer
 
+# ...or non-interactively (cloud-init, SSM, CI): skip the confirmation prompt
+sudo composer install systemd --user ec2-user --working-dir /home/ec2-user --yes
+
 # Install as a launchd service (macOS)
 composer install launchd
 

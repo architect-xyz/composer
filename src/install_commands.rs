@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Subcommand;
 use log::info;
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{env, fs, io::IsTerminal, path::PathBuf, process::Command};
 
 #[derive(Subcommand)]
 pub enum InstallCommands {
@@ -31,6 +31,9 @@ pub enum InstallCommands {
         /// Extra environment variables (KEY=VALUE), repeatable
         #[clap(long)]
         env: Vec<String>,
+        /// Skip the confirmation prompt (for non-interactive use)
+        #[clap(short = 'y', long)]
+        yes: bool,
     },
     /// Show installation status
     Status,
@@ -45,11 +48,29 @@ pub enum InstallCommands {
         /// Extra environment variables (KEY=VALUE), repeatable
         #[clap(long)]
         env: Vec<String>,
+        /// Skip the confirmation prompt (for non-interactive use)
+        #[clap(short = 'y', long)]
+        yes: bool,
     },
 }
 
 fn default_user() -> String {
     env::var("SUDO_USER").unwrap_or_else(|_| whoami::username())
+}
+
+/// Prompt to proceed, unless `yes` was passed; fails with a hint about `--yes`
+/// if there's no terminal to prompt on.
+fn confirm_proceed(yes: bool) -> Result<bool> {
+    if yes {
+        return Ok(true);
+    }
+    if !std::io::stdin().is_terminal() {
+        bail!("no TTY available for confirmation; re-run with --yes to skip the prompt");
+    }
+    inquire::Confirm::new("Proceed?")
+        .with_default(true)
+        .prompt()
+        .context("failed to read confirmation")
 }
 
 pub fn install(command: InstallCommands) -> Result<()> {
@@ -66,12 +87,14 @@ pub fn install(command: InstallCommands) -> Result<()> {
             working_dir,
             compose_file,
             env,
-        } => install_systemd(&user, working_dir, &compose_file, &env),
+            yes,
+        } => install_systemd(&user, working_dir, &compose_file, &env, yes),
         InstallCommands::Launchd {
             working_dir,
             compose_file,
             env,
-        } => install_launchd(working_dir, &compose_file, &env),
+            yes,
+        } => install_launchd(working_dir, &compose_file, &env, yes),
     }
 }
 
@@ -350,6 +373,7 @@ fn install_systemd(
     working_dir: Option<String>,
     compose_file: &str,
     extra_env: &[String],
+    yes: bool,
 ) -> Result<()> {
     let working_dir = match working_dir {
         Some(dir) => dir,
@@ -377,11 +401,7 @@ fn install_systemd(
     for kv in extra_env {
         println!("  env: {kv}");
     }
-    let confirm = inquire::Confirm::new("Proceed?")
-        .with_default(true)
-        .prompt()
-        .context("failed to read confirmation")?;
-    if !confirm {
+    if !confirm_proceed(yes)? {
         println!("Aborted.");
         return Ok(());
     }
@@ -435,6 +455,7 @@ fn install_launchd(
     working_dir: Option<String>,
     compose_file: &str,
     extra_env: &[String],
+    yes: bool,
 ) -> Result<()> {
     let working_dir = match working_dir {
         Some(dir) => dir,
@@ -455,11 +476,7 @@ fn install_launchd(
     for kv in extra_env {
         println!("  env: {kv}");
     }
-    let confirm = inquire::Confirm::new("Proceed?")
-        .with_default(true)
-        .prompt()
-        .context("failed to read confirmation")?;
-    if !confirm {
+    if !confirm_proceed(yes)? {
         println!("Aborted.");
         return Ok(());
     }
