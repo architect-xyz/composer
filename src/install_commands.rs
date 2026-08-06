@@ -82,19 +82,12 @@ pub fn install(command: InstallCommands) -> Result<()> {
             install_shell_aliases("zsh", ".zshrc.d", "composer.zsh", with_guards)
         }
         InstallCommands::Status => install_status(),
-        InstallCommands::Systemd {
-            user,
-            working_dir,
-            compose_file,
-            env,
-            yes,
-        } => install_systemd(&user, working_dir, &compose_file, &env, yes),
-        InstallCommands::Launchd {
-            working_dir,
-            compose_file,
-            env,
-            yes,
-        } => install_launchd(working_dir, &compose_file, &env, yes),
+        InstallCommands::Systemd { user, working_dir, compose_file, env, yes } => {
+            install_systemd(&user, working_dir, &compose_file, &env, yes)
+        }
+        InstallCommands::Launchd { working_dir, compose_file, env, yes } => {
+            install_launchd(working_dir, &compose_file, &env, yes)
+        }
     }
 }
 
@@ -115,9 +108,8 @@ fn install_shell_aliases(
 
     if !dir.exists() {
         info!("creating directory: {}", dir.display());
-        fs::create_dir_all(&dir).with_context(|| {
-            format!("failed to create directory: {}", dir.display())
-        })?;
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create directory: {}", dir.display()))?;
     }
 
     let content = if with_guards {
@@ -126,9 +118,8 @@ fn install_shell_aliases(
         ALIASES_CONTENT.to_string()
     };
 
-    fs::write(&target_file, &content).with_context(|| {
-        format!("failed to write file: {}", target_file.display())
-    })?;
+    fs::write(&target_file, &content)
+        .with_context(|| format!("failed to write file: {}", target_file.display()))?;
 
     info!("successfully installed {shell} aliases to {}", target_file.display());
     let suffix = if with_guards { " (with guards)" } else { "" };
@@ -176,16 +167,10 @@ pub fn uninstall() -> Result<()> {
     // Stop and remove systemd service
     let unit_path = PathBuf::from("/etc/systemd/system/composer.service");
     if unit_path.exists() {
-        let _ = Command::new("systemctl")
-            .args(["stop", "composer"])
-            .status();
-        let _ = Command::new("systemctl")
-            .args(["disable", "composer"])
-            .status();
+        let _ = Command::new("systemctl").args(["stop", "composer"]).status();
+        let _ = Command::new("systemctl").args(["disable", "composer"]).status();
         if fs::remove_file(&unit_path).is_ok() {
-            let _ = Command::new("systemctl")
-                .arg("daemon-reload")
-                .status();
+            let _ = Command::new("systemctl").arg("daemon-reload").status();
             removed.push(format!("systemd unit: {}", unit_path.display()));
         }
     }
@@ -305,9 +290,7 @@ fn print_systemd_status() {
     }
 
     // Check service state via systemctl
-    if let Ok(output) = Command::new("systemctl")
-        .args(["is-active", "composer"])
-        .output()
+    if let Ok(output) = Command::new("systemctl").args(["is-active", "composer"]).output()
     {
         let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let enabled = Command::new("systemctl")
@@ -344,9 +327,8 @@ fn print_launchd_status(home: &str) {
     }
 
     // Check service state via launchctl
-    if let Ok(output) = Command::new("launchctl")
-        .args(["list", "com.architect.composer"])
-        .output()
+    if let Ok(output) =
+        Command::new("launchctl").args(["list", "com.architect.composer"]).output()
     {
         if output.status.success() {
             // Parse PID from launchctl list output (format: PID\tStatus\tLabel)
@@ -354,7 +336,9 @@ fn print_launchd_status(home: &str) {
             let parts: Vec<&str> = out.lines().last().unwrap_or("").split('\t').collect();
             match parts.first().copied() {
                 Some("-") => println!("    state: not running"),
-                Some(pid) if !pid.is_empty() => println!("    state: running (pid {pid})"),
+                Some(pid) if !pid.is_empty() => {
+                    println!("    state: running (pid {pid})")
+                }
                 _ => println!("    state: loaded"),
             }
         } else {
@@ -484,7 +468,8 @@ fn install_launchd(
     let env_dict = if extra_env.is_empty() {
         String::new()
     } else {
-        let mut entries = String::from("    <key>EnvironmentVariables</key>\n    <dict>\n");
+        let mut entries =
+            String::from("    <key>EnvironmentVariables</key>\n    <dict>\n");
         for kv in extra_env {
             if let Some((key, value)) = kv.split_once('=') {
                 entries.push_str(&format!(
@@ -536,9 +521,8 @@ fn install_launchd(
     let plist_path = launch_agents.join("com.architect.composer.plist");
 
     info!("writing launchd plist to {}", plist_path.display());
-    fs::write(&plist_path, &plist).with_context(|| {
-        format!("failed to write plist to {}", plist_path.display())
-    })?;
+    fs::write(&plist_path, &plist)
+        .with_context(|| format!("failed to write plist to {}", plist_path.display()))?;
 
     println!("Installed launchd plist to {}", plist_path.display());
     println!("Run `launchctl load {}` to start the service.", plist_path.display());
