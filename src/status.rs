@@ -19,12 +19,23 @@ struct DockerComposePsJson {
     service: String,
     #[serde(rename = "State")]
     state: String,
+    #[serde(rename = "Status", default)]
+    status: String,
+    #[serde(rename = "Image", default)]
+    image: String,
+}
+
+#[derive(Debug, Default)]
+pub struct ContainerStatus {
+    pub state: String,
+    pub status: String,
+    pub image: String,
 }
 
 pub async fn gather_status_data(
     context: &ComposeContext,
     compose: &crate::compose_types::Compose,
-) -> Result<(Vec<ServiceInfo>, BTreeMap<String, String>)> {
+) -> Result<(Vec<ServiceInfo>, BTreeMap<String, ContainerStatus>)> {
     // Collect service information
     let mut services_info: Vec<ServiceInfo> = Vec::new();
     for (name, service_opt) in &compose.services {
@@ -81,19 +92,107 @@ pub async fn gather_status_data(
     }
 
     let stdout_s = String::from_utf8_lossy(&cmd_out.stdout);
-    let mut status_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut status_map: BTreeMap<String, ContainerStatus> = BTreeMap::new();
     for line in stdout_s.lines() {
         if let Ok(row) = serde_json::from_str::<DockerComposePsJson>(line) {
-            status_map.insert(row.service, row.state);
+            status_map.insert(
+                row.service,
+                ContainerStatus {
+                    state: row.state,
+                    status: row.status,
+                    image: row.image,
+                },
+            );
         }
     }
 
     Ok((services_info, status_map))
 }
 
+/// Condense docker's "Up 3 hours" status text into a short form like "3h".
+/// Returns None if the input doesn't match the running-uptime format.
+fn short_uptime(status: &str) -> Option<String> {
+    let s = status.strip_prefix("Up ")?;
+    // Drop trailing health/parenthetical annotations like " (healthy)".
+    let s = s.split(" (").next()?.trim();
+
+    match s {
+        "Less than a second" => return Some("<1s".to_string()),
+        "About a minute" => return Some("1m".to_string()),
+        "About an hour" => return Some("1h".to_string()),
+        _ => {}
+    }
+
+    let (num, unit) = s.split_once(' ')?;
+    let n: u64 = num.parse().ok()?;
+    let suffix = match unit {
+        "second" | "seconds" => "s",
+        "minute" | "minutes" => "m",
+        "hour" | "hours" => "h",
+        "day" | "days" => "d",
+        "week" | "weeks" => "w",
+        "month" | "months" => "mo",
+        "year" | "years" => "y",
+        _ => return None,
+    };
+    Some(format!("{n}{suffix}"))
+}
+
+/// Scan an image reference for a semver-shaped tag like `v1.2.3` or
+/// `v1.2.3-beta.1` and return it if present.
+fn extract_version(image: &str) -> Option<String> {
+    let bytes = image.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if bytes[i] == b'v' {
+            let boundary =
+                i == 0 || matches!(bytes[i - 1], b':' | b'/' | b'@' | b'-' | b'_' | b'.');
+            if boundary {
+                if let Some(end) = parse_semver_tail(bytes, i + 1) {
+                    return std::str::from_utf8(&bytes[i..end]).ok().map(str::to_string);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Parse `N.N.N(-suffix)?` starting at `start`. Returns the end index if the
+/// parse succeeds, None otherwise.
+fn parse_semver_tail(bytes: &[u8], start: usize) -> Option<usize> {
+    let n = bytes.len();
+    let mut i = start;
+    for seg in 0..3 {
+        let seg_start = i;
+        while i < n && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == seg_start {
+            return None;
+        }
+        if seg < 2 {
+            if i >= n || bytes[i] != b'.' {
+                return None;
+            }
+            i += 1;
+        }
+    }
+    if i < n && bytes[i] == b'-' {
+        i += 1;
+        while i < n
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.' || bytes[i] == b'-')
+        {
+            i += 1;
+        }
+    }
+    Some(i)
+}
+
 pub fn format_status_table(
     services_info: &[ServiceInfo],
-    status_map: &BTreeMap<String, String>,
+    status_map: &BTreeMap<String, ContainerStatus>,
 ) -> Result<String> {
     if services_info.is_empty() {
         return Ok("No services found in compose file.\n".to_string());
@@ -121,35 +220,48 @@ pub fn format_status_table(
         .build();
     table.set_format(custom_format);
 
-    table.set_titles(row!["Profile", "Name", "Type", "Status"]);
+    table.set_titles(row!["Profile", "Name", "Type", "Status", "Version"]);
 
     for info in services_info {
-        let raw_state = status_map.get(&info.name).map(|s| s.as_str());
+        let container = status_map.get(&info.name);
+        let raw_state = container.map(|c| c.state.as_str());
+        let uptime = container
+            .filter(|c| c.state == "running")
+            .and_then(|c| short_uptime(&c.status));
 
-        // For jobs: show JOB_RUNNING when running, JOB when finished
-        // For services: show UP/DOWN as before
-        let status_cell = if info.service_type == "job" {
-            if raw_state == Some("running") {
-                Cell::new("JOB_RUNNING").with_style(Attr::ForegroundColor(color::GREEN))
+        let is_running = raw_state == Some("running");
+        let (label, color) = if info.service_type == "job" {
+            if is_running {
+                ("JOB_RUNNING", Some(color::GREEN))
             } else {
-                Cell::new("JOB")
+                ("JOB", None)
             }
+        } else if is_running {
+            ("UP", Some(color::GREEN))
         } else {
-            // Service: use UP/DOWN
-            let display_status = if raw_state == Some("running") { "UP" } else { "DOWN" };
-            if display_status == "UP" {
-                Cell::new(display_status).with_style(Attr::ForegroundColor(color::GREEN))
-            } else {
-                Cell::new(display_status).with_style(Attr::ForegroundColor(color::RED))
-            }
+            ("DOWN", Some(color::RED))
         };
 
-        // Create row with colored status cell
+        let status_text = match uptime {
+            Some(u) => format!("{label} ({u})"),
+            None => label.to_string(),
+        };
+        let mut status_cell = Cell::new(&status_text);
+        if let Some(c) = color {
+            status_cell = status_cell.with_style(Attr::ForegroundColor(c));
+        }
+
+        let version = container
+            .map(|c| c.image.as_str())
+            .and_then(extract_version)
+            .unwrap_or_else(|| "?".to_string());
+
         table.add_row(Row::new(vec![
             Cell::new(&info.profile),
             Cell::new(&info.name),
             Cell::new(&info.service_type),
             status_cell,
+            Cell::new(&version),
         ]));
     }
 
@@ -172,4 +284,78 @@ pub fn format_status_table(
 
     let out = String::from_utf8_lossy(&buffer).to_string();
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_uptime_common_forms() {
+        assert_eq!(short_uptime("Up 3 hours"), Some("3h".to_string()));
+        assert_eq!(short_uptime("Up 5 minutes"), Some("5m".to_string()));
+        assert_eq!(short_uptime("Up 1 second"), Some("1s".to_string()));
+        assert_eq!(short_uptime("Up 12 days"), Some("12d".to_string()));
+        assert_eq!(short_uptime("Up 2 weeks"), Some("2w".to_string()));
+        assert_eq!(short_uptime("Up 4 months"), Some("4mo".to_string()));
+        assert_eq!(short_uptime("Up 1 year"), Some("1y".to_string()));
+    }
+
+    #[test]
+    fn short_uptime_approximate_forms() {
+        assert_eq!(short_uptime("Up About a minute"), Some("1m".to_string()));
+        assert_eq!(short_uptime("Up About an hour"), Some("1h".to_string()));
+        assert_eq!(short_uptime("Up Less than a second"), Some("<1s".to_string()));
+    }
+
+    #[test]
+    fn short_uptime_strips_health_annotation() {
+        assert_eq!(short_uptime("Up 3 hours (healthy)"), Some("3h".to_string()));
+        assert_eq!(short_uptime("Up 2 minutes (unhealthy)"), Some("2m".to_string()));
+    }
+
+    #[test]
+    fn short_uptime_rejects_non_running() {
+        assert_eq!(short_uptime("Exited (0) 5 minutes ago"), None);
+        assert_eq!(short_uptime("Restarting (1) 3 seconds ago"), None);
+        assert_eq!(short_uptime(""), None);
+    }
+
+    #[test]
+    fn extract_version_common_tags() {
+        assert_eq!(extract_version("nginx:v1.2.3"), Some("v1.2.3".to_string()));
+        assert_eq!(
+            extract_version("ghcr.io/org/svc:v0.10.12"),
+            Some("v0.10.12".to_string())
+        );
+        assert_eq!(
+            extract_version("registry.example.com/team/app:v2.0.0-beta.1"),
+            Some("v2.0.0-beta.1".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_version_missing_returns_none() {
+        assert_eq!(extract_version("nginx:latest"), None);
+        assert_eq!(extract_version("postgres"), None);
+        assert_eq!(extract_version("service:1.2.3"), None); // no 'v' prefix
+        assert_eq!(extract_version("service:v1.2"), None); // not full semver
+        assert_eq!(extract_version(""), None);
+    }
+
+    #[test]
+    fn extract_version_ignores_v_inside_words() {
+        // The 'v' in 'nova' should not be treated as a version prefix.
+        assert_eq!(extract_version("nova:latest"), None);
+        assert_eq!(extract_version("service:stable"), None);
+    }
+
+    #[test]
+    fn extract_version_with_digest_suffix() {
+        // Even when a digest follows, we still surface the tag.
+        assert_eq!(
+            extract_version("nginx:v1.2.3@sha256:abc123"),
+            Some("v1.2.3".to_string())
+        );
+    }
 }
