@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.13](https://github.com/architect-xyz/composer/compare/v0.10.12...v0.10.13) (2026-08-06)
+
+
+### Features
+
+* **install:** add --yes flag for non-interactive systemd/launchd installs ([#46](https://github.com/architect-xyz/composer/issues/46)) ([fa66378](https://github.com/architect-xyz/composer/commit/fa66378d0ce6bf0be7200de3b9dc2092354078b7))
+* **install:** default to /usr/local/bin with sudo, add --local flag ([93621fa](https://github.com/architect-xyz/composer/commit/93621fa58075e1bb1537b87f23bd45144a7a66e1))
+* **status:** show uptime and parsed version in status table ([#41](https://github.com/architect-xyz/composer/issues/41)) ([1abad32](https://github.com/architect-xyz/composer/commit/1abad3239dcab5c5de54ead21294299e722234a2))
+
 ## [0.10.12](https://github.com/architect-xyz/composer/compare/v0.10.11...v0.10.12) (2026-04-21)
 
 
