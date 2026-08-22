@@ -54,6 +54,15 @@ pub enum InstallCommands {
     },
 }
 
+pub const SYSTEMD_UNIT_PATH: &str = "/etc/systemd/system/composer.service";
+pub const LAUNCHD_LABEL: &str = "com.architect.composer";
+
+pub fn launchd_plist_path(home: &str) -> PathBuf {
+    PathBuf::from(home)
+        .join("Library/LaunchAgents")
+        .join(format!("{LAUNCHD_LABEL}.plist"))
+}
+
 fn default_user() -> String {
     env::var("SUDO_USER").unwrap_or_else(|_| whoami::username())
 }
@@ -165,7 +174,7 @@ pub fn uninstall() -> Result<()> {
     let mut removed = vec![];
 
     // Stop and remove systemd service
-    let unit_path = PathBuf::from("/etc/systemd/system/composer.service");
+    let unit_path = PathBuf::from(SYSTEMD_UNIT_PATH);
     if unit_path.exists() {
         let _ = Command::new("systemctl").args(["stop", "composer"]).status();
         let _ = Command::new("systemctl").args(["disable", "composer"]).status();
@@ -176,8 +185,7 @@ pub fn uninstall() -> Result<()> {
     }
 
     // Unload and remove launchd plist
-    let plist_path =
-        PathBuf::from(&home).join("Library/LaunchAgents/com.architect.composer.plist");
+    let plist_path = launchd_plist_path(&home);
     if plist_path.exists() {
         let _ = Command::new("launchctl")
             .args(["unload", &plist_path.to_string_lossy()])
@@ -264,7 +272,7 @@ pub fn update() -> Result<()> {
 }
 
 fn print_systemd_status() {
-    let unit_path = PathBuf::from("/etc/systemd/system/composer.service");
+    let unit_path = PathBuf::from(SYSTEMD_UNIT_PATH);
     if !unit_path.exists() {
         println!("  systemd: not installed");
         return;
@@ -290,21 +298,27 @@ fn print_systemd_status() {
     }
 
     // Check service state via systemctl
-    if let Ok(output) = Command::new("systemctl").args(["is-active", "composer"]).output()
-    {
-        let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let enabled = Command::new("systemctl")
-            .args(["is-enabled", "composer"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
-        println!("    state: {state}, {enabled}");
+    if let Some(state) = systemd_state() {
+        println!("    state: {state}");
     }
 }
 
+/// Describe the systemd service state, e.g. `active, enabled`.  None if
+/// systemctl could not be run.
+pub fn systemd_state() -> Option<String> {
+    let output =
+        Command::new("systemctl").args(["is-active", "composer"]).output().ok()?;
+    let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let enabled = Command::new("systemctl")
+        .args(["is-enabled", "composer"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    Some(format!("{state}, {enabled}"))
+}
+
 fn print_launchd_status(home: &str) {
-    let plist_path =
-        PathBuf::from(home).join("Library/LaunchAgents/com.architect.composer.plist");
+    let plist_path = launchd_plist_path(home);
     if !plist_path.exists() {
         println!("  launchd: not installed");
         return;
@@ -327,23 +341,42 @@ fn print_launchd_status(home: &str) {
     }
 
     // Check service state via launchctl
-    if let Ok(output) =
-        Command::new("launchctl").args(["list", "com.architect.composer"]).output()
-    {
-        if output.status.success() {
-            // Parse PID from launchctl list output (format: PID\tStatus\tLabel)
-            let out = String::from_utf8_lossy(&output.stdout);
-            let parts: Vec<&str> = out.lines().last().unwrap_or("").split('\t').collect();
-            match parts.first().copied() {
-                Some("-") => println!("    state: not running"),
-                Some(pid) if !pid.is_empty() => {
-                    println!("    state: running (pid {pid})")
-                }
-                _ => println!("    state: loaded"),
-            }
-        } else {
-            println!("    state: not loaded");
+    if let Some(state) = launchd_state() {
+        println!("    state: {state}");
+    }
+}
+
+/// Describe the launchd service state, e.g. `running (pid 123)`,
+/// `not running (last exit status 1)`, or `not loaded`.  None if launchctl
+/// could not be run.
+pub fn launchd_state() -> Option<String> {
+    let output = Command::new("launchctl").args(["list", LAUNCHD_LABEL]).output().ok()?;
+    if !output.status.success() {
+        return Some("not loaded".to_string());
+    }
+    Some(parse_launchctl_list(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Parse the output of `launchctl list <label>`, which is a plist-ish
+/// dictionary with lines like `"PID" = 123;` and `"LastExitStatus" = 0;`.
+fn parse_launchctl_list(out: &str) -> String {
+    let field = |name: &str| -> Option<String> {
+        out.lines().find_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix(&format!("\"{name}\""))?.trim_start();
+            let rest = rest.strip_prefix('=')?.trim();
+            Some(rest.trim_end_matches(';').trim().to_string())
+        })
+    };
+    if let Some(pid) = field("PID") {
+        return format!("running (pid {pid})");
+    }
+    match field("LastExitStatus") {
+        Some(status) if status != "0" => {
+            format!("not running (last exit status {status})")
         }
+        Some(_) => "not running".to_string(),
+        None => "loaded".to_string(),
     }
 }
 
@@ -411,7 +444,7 @@ WantedBy=multi-user.target
 "
     );
 
-    let unit_path = PathBuf::from("/etc/systemd/system/composer.service");
+    let unit_path = PathBuf::from(SYSTEMD_UNIT_PATH);
     info!("writing systemd unit to {}", unit_path.display());
     fs::write(&unit_path, &unit).with_context(|| {
         format!(
@@ -430,7 +463,7 @@ WantedBy=multi-user.target
     }
 
     println!("Installed systemd unit to {}", unit_path.display());
-    println!("Run `systemctl enable --now composer` to start the service.");
+    println!("Run `systemctl enable --now composer` (or `composer start`) to start the service.");
 
     Ok(())
 }
@@ -518,14 +551,14 @@ fn install_launchd(
             format!("failed to create directory: {}", launch_agents.display())
         })?;
     }
-    let plist_path = launch_agents.join("com.architect.composer.plist");
+    let plist_path = launch_agents.join(format!("{LAUNCHD_LABEL}.plist"));
 
     info!("writing launchd plist to {}", plist_path.display());
     fs::write(&plist_path, &plist)
         .with_context(|| format!("failed to write plist to {}", plist_path.display()))?;
 
     println!("Installed launchd plist to {}", plist_path.display());
-    println!("Run `launchctl load {}` to start the service.", plist_path.display());
+    println!("Run `composer start` to start the service.");
 
     Ok(())
 }
@@ -536,4 +569,28 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launchctl_list_running() {
+        let out = "{\n\t\"Label\" = \"com.architect.composer\";\n\t\"LastExitStatus\" = 0;\n\t\"PID\" = 4242;\n};\n";
+        assert_eq!(parse_launchctl_list(out), "running (pid 4242)");
+    }
+
+    #[test]
+    fn launchctl_list_exited() {
+        let out = "{\n\t\"Label\" = \"com.architect.composer\";\n\t\"LastExitStatus\" = 256;\n};\n";
+        assert_eq!(parse_launchctl_list(out), "not running (last exit status 256)");
+        let out = "{\n\t\"LastExitStatus\" = 0;\n};\n";
+        assert_eq!(parse_launchctl_list(out), "not running");
+    }
+
+    #[test]
+    fn launchctl_list_unknown_shape() {
+        assert_eq!(parse_launchctl_list("{\n};\n"), "loaded");
+    }
 }

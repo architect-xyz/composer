@@ -121,8 +121,8 @@ sudo systemctl enable --now composer-project-b
 cd ~/my-project
 composer install launchd
 
-# Load the service
-launchctl load ~/Library/LaunchAgents/com.architect.composer.plist
+# Start the service
+composer start
 ```
 
 ### Options
@@ -146,6 +146,29 @@ composer install zsh    # writes to ~/.zshrc.d/composer.zsh
 Both install the same file — the syntax is bash/zsh compatible. The aliases
 are sourced automatically if your shell is configured to source files from
 `~/.bashrc.d/` or `~/.zshrc.d/`.
+
+## Controlling the service
+
+Once installed under systemd or launchd, `composer start`, `composer stop`,
+and `composer restart` control the daemon without having to remember the
+platform-specific incantation. They detect which service manager is installed
+(the same way `composer install status` does) and print the resulting state:
+
+```bash
+$ composer restart
+$ launchctl kickstart -k gui/501/com.architect.composer
+launchd: com.architect.composer is running (pid 4242)
+```
+
+- **systemd**: runs `systemctl start|stop|restart composer` (via `sudo` when
+  not root).
+- **launchd**: `restart` runs `launchctl kickstart -k`; `start`/`restart`
+  bootstrap the plist first if it isn't loaded; `stop` runs
+  `launchctl bootout` (since the plist sets `KeepAlive`, merely killing the
+  process would have launchd bring it straight back).
+
+If neither is installed, the command says so and suggests
+`composer install systemd` / `composer install launchd`.
 
 ## Checking installation status
 
@@ -206,5 +229,5 @@ curl -fsSL https://github.com/afintech/composer/releases/latest/download/compose
 chmod +x ~/.local/bin/composer
 
 # Restart
-sudo systemctl restart composer
+composer restart   # or: sudo systemctl restart composer
 ```

@@ -15,6 +15,7 @@ mod compose_types;
 mod container_monitor;
 mod install_commands;
 mod scheduler;
+mod service_commands;
 mod status;
 mod status_command;
 mod status_server;
@@ -101,11 +102,17 @@ enum Commands {
         #[clap(short = 'c', long)]
         config: Option<String>,
     },
-    /// Show status of all services: profile, service name, type (service/job), and UP/DOWN status
-    Status,
     /// Install additional components
     #[command(subcommand)]
     Install(install_commands::InstallCommands),
+    /// Restart the installed composer service (systemd or launchd)
+    Restart,
+    /// Start the installed composer service (systemd or launchd)
+    Start,
+    /// Show status of all services: profile, service name, type (service/job), and UP/DOWN status
+    Status,
+    /// Stop the installed composer service (systemd or launchd)
+    Stop,
     /// Remove all installed components (aliases, service)
     Uninstall,
     /// Update composer to the latest version
@@ -187,6 +194,13 @@ async fn main() -> Result<()> {
                     bail!("No certificate monitor configuration provided. Use --config, --certificate-monitor, or CERTIFICATE_MONITOR env var");
                 }
             }
+            Commands::Install(command) => install_commands::install(command),
+            Commands::Restart => {
+                service_commands::control(service_commands::ServiceAction::Restart)
+            }
+            Commands::Start => {
+                service_commands::control(service_commands::ServiceAction::Start)
+            }
             Commands::Status => {
                 let compose_file = resolve_compose_file(args.compose_file)?;
                 let context = ComposeContext {
@@ -197,7 +211,9 @@ async fn main() -> Result<()> {
                 };
                 status_command::show_status(&context).await
             }
-            Commands::Install(command) => install_commands::install(command),
+            Commands::Stop => {
+                service_commands::control(service_commands::ServiceAction::Stop)
+            }
             Commands::Uninstall => install_commands::uninstall(),
             Commands::Update => install_commands::update(),
         };
