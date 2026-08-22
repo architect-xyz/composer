@@ -164,6 +164,21 @@ labels:
   - "co.architect.composer.run=0 0 9 * * *"  # 9 AM Eastern
 ```
 
+### Pulling images before a run
+
+`docker compose run` pulls a service's image if it isn't present locally. To
+also refresh an image that *is* present (e.g. a `:latest` tag that moves),
+set a pull policy per service; it is passed through as
+`docker compose run --pull <policy>`:
+
+```yaml
+labels:
+  - "co.architect.composer.run=0 0 2 * * *"
+  - "co.architect.composer.pull=always"   # always | missing | never
+```
+
+This applies to `run` schedules only; `restart` schedules never pull.
+
 ### Manual schedules
 
 Use `manual` to register a service with composer (for status tracking)
