@@ -3,12 +3,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Local, Utc};
 use log::debug;
 use prettytable_rs::{color, format, row, Attr, Cell, Row, Table};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    process::Stdio,
-};
+use std::{collections::BTreeMap, process::Stdio};
 use term::terminfo::{TermInfo, TerminfoTerminal};
-use tokio::task::JoinSet;
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
 
@@ -19,8 +15,6 @@ pub struct ServiceInfo {
     pub service_type: String, // "job" or "service"
     /// Image reference declared in the compose file, if any
     pub image: Option<String>,
-    /// Creation time of the declared image, if present locally
-    pub image_created: Option<DateTime<Utc>>,
 }
 
 #[derive(serde::Deserialize)]
@@ -44,8 +38,6 @@ pub struct ContainerStatus {
     pub image: String,
     /// When the container was last (re)started
     pub started_at: Option<DateTime<Utc>>,
-    /// Creation time of the image the container is actually running
-    pub image_created: Option<DateTime<Utc>>,
 }
 
 pub async fn gather_status_data(
@@ -86,7 +78,6 @@ pub async fn gather_status_data(
                 name: name.clone(),
                 service_type: service_type.to_string(),
                 image: service.image.clone(),
-                image_created: None,
             });
         }
     }
@@ -124,16 +115,12 @@ pub async fn gather_status_data(
                     status: row.status,
                     image: row.image,
                     started_at: None,
-                    image_created: None,
                 },
             );
         }
     }
 
-    // Inspect containers for their last start time and the exact image
-    // (by id) they are running; the latter may differ from what the tag
-    // currently points at if the image was re-pulled without recreating.
-    let mut container_image_ids: BTreeMap<String, String> = BTreeMap::new(); // service -> image id
+    // Inspect containers for their last start time, in one call.
     if !container_ids.is_empty() {
         for details in inspect_containers(container_ids.keys()).await? {
             // compose ps reports short ids; inspect reports full ids
@@ -141,32 +128,10 @@ pub async fn gather_status_data(
                 .iter()
                 .find(|(id, _)| details.id.starts_with(id.as_str()))
                 .map(|(_, service)| service);
-            if let Some(service) = service {
-                if let Some(container) = status_map.get_mut(service) {
-                    container.started_at = details.started_at;
-                }
-                container_image_ids.insert(service.clone(), details.image_id);
+            if let Some(container) = service.and_then(|s| status_map.get_mut(s)) {
+                container.started_at = details.started_at;
             }
         }
-    }
-
-    // Look up image creation times, both for the images containers are
-    // running and for the images declared in the compose file (so that
-    // jobs and DOWN services still show when their image was built).
-    let image_refs: BTreeSet<String> = container_image_ids
-        .values()
-        .cloned()
-        .chain(services_info.iter().filter_map(|info| info.image.clone()))
-        .collect();
-    let image_created = inspect_image_created(image_refs).await;
-    for (service, image_id) in &container_image_ids {
-        if let Some(container) = status_map.get_mut(service) {
-            container.image_created = image_created.get(image_id).copied();
-        }
-    }
-    for info in &mut services_info {
-        info.image_created =
-            info.image.as_ref().and_then(|image| image_created.get(image).copied());
     }
 
     Ok((services_info, status_map))
@@ -175,11 +140,10 @@ pub async fn gather_status_data(
 struct ContainerDetails {
     id: String,
     started_at: Option<DateTime<Utc>>,
-    image_id: String,
 }
 
-/// Run `docker inspect` on the given container ids, returning start time and
-/// image id for each one found.  Containers that have disappeared since they
+/// Run `docker inspect` on the given container ids, returning the start time
+/// of each one found.  Containers that have disappeared since they
 /// were listed are skipped rather than failing the whole status.
 async fn inspect_containers<I, S>(ids: I) -> Result<Vec<ContainerDetails>>
 where
@@ -191,7 +155,7 @@ where
         .arg("--type")
         .arg("container")
         .arg("--format")
-        .arg("{{.Id}}\t{{.State.StartedAt}}\t{{.Image}}")
+        .arg("{{.Id}}\t{{.State.StartedAt}}")
         .args(ids)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -209,54 +173,9 @@ where
             let mut parts = line.split('\t');
             let id = parts.next()?.to_string();
             let started_at = parse_docker_time(parts.next()?);
-            let image_id = parts.next()?.to_string();
-            Some(ContainerDetails { id, started_at, image_id })
+            Some(ContainerDetails { id, started_at })
         })
         .collect())
-}
-
-/// Look up the creation time of each image reference (id, tag, or digest),
-/// concurrently.  References that aren't present locally are omitted.
-async fn inspect_image_created<I>(refs: I) -> BTreeMap<String, DateTime<Utc>>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut tasks = JoinSet::new();
-    for image in refs {
-        tasks.spawn(async move {
-            let out = tokio::process::Command::new("docker")
-                .args(["image", "inspect", "--format", "{{.Created}}", &image])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output()
-                .await;
-            let created = match out {
-                Ok(out) if out.status.success() => {
-                    parse_docker_time(String::from_utf8_lossy(&out.stdout).trim())
-                }
-                Ok(out) => {
-                    debug!(
-                        "docker image inspect {image} exited with {}: {}",
-                        out.status,
-                        String::from_utf8_lossy(&out.stderr).trim()
-                    );
-                    None
-                }
-                Err(e) => {
-                    debug!("running docker image inspect {image}: {e:?}");
-                    None
-                }
-            };
-            (image, created)
-        });
-    }
-    let mut created_map = BTreeMap::new();
-    while let Some(res) = tasks.join_next().await {
-        if let Ok((image, Some(created))) = res {
-            created_map.insert(image, created);
-        }
-    }
-    created_map
 }
 
 /// Parse an RFC 3339 timestamp as emitted by docker inspect.  Docker uses
@@ -388,15 +307,7 @@ pub fn format_status_table(
         .build();
     table.set_format(custom_format);
 
-    table.set_titles(row![
-        "Profile",
-        "Name",
-        "Type",
-        "Status",
-        "Version",
-        "Image Created",
-        "Started"
-    ]);
+    table.set_titles(row!["Profile", "Name", "Type", "Status", "Version", "Started"]);
 
     for info in services_info {
         let container = status_map.get(&info.name);
@@ -434,8 +345,6 @@ pub fn format_status_table(
             .or(info.image.as_deref())
             .and_then(extract_version)
             .unwrap_or_else(|| "?".to_string());
-        let image_created =
-            container.and_then(|c| c.image_created).or(info.image_created);
         let started_at = container.and_then(|c| c.started_at);
 
         table.add_row(Row::new(vec![
@@ -444,7 +353,6 @@ pub fn format_status_table(
             Cell::new(&info.service_type),
             status_cell,
             Cell::new(&version),
-            Cell::new(&format_time(image_created)),
             Cell::new(&format_time(started_at)),
         ]));
     }
