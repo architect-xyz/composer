@@ -106,6 +106,9 @@ composer install launchd
 # Check installation status
 composer install status
 
+# Start / stop / restart the installed service (systemd or launchd)
+composer restart
+
 # Run interactively (auto-detects compose file in current directory)
 composer
 ```
@@ -281,6 +284,9 @@ Commands:
   install systemd             Install systemd service unit (Linux)
   install launchd             Install launchd plist (macOS)
   install status              Show installation status
+  start                       Start the installed service (systemd/launchd)
+  stop                        Stop the installed service (systemd/launchd)
+  restart                     Restart the installed service (systemd/launchd)
 ```
 
 All options can also be set via environment variables (`COMPOSE_RUN_LOGS`,
