@@ -285,21 +285,20 @@ fn extract_version(image: &str) -> Option<String> {
     TAG_VERSION.captures(tag).map(|c| c[1].to_string())
 }
 
-/// Best available version string for a service: a version parsed from the
-/// image tag, else the image's OCI version label, else the short image id
-/// of the running container.
+/// Best available version string for a service: the image's OCI version
+/// label (the image's own claim about itself), else a version parsed from
+/// the image tag, else the short image id of the running container.
 fn detect_version(
     image: Option<&str>,
     container: Option<&ContainerStatus>,
 ) -> Option<String> {
+    if let Some(v) = container.and_then(|c| c.image_version_label.as_deref()) {
+        return Some(v.to_string());
+    }
     if let Some(v) = image.and_then(extract_version) {
         return Some(v);
     }
-    let container = container?;
-    if let Some(v) = container.image_version_label.as_deref() {
-        return Some(v.to_string());
-    }
-    container.image_id.as_deref().map(short_image_id)
+    container?.image_id.as_deref().map(short_image_id)
 }
 
 /// `sha256:102dbfdde2da60d2...` -> `102dbfdde2da`
@@ -521,17 +520,21 @@ mod tests {
     }
 
     #[test]
-    fn detect_version_prefers_tag_then_label_then_id() {
+    fn detect_version_prefers_label_then_tag_then_id() {
         let c = container(Some("0.159.0"), Some("sha256:102dbfdde2da60d2b8ec"));
         assert_eq!(
             detect_version(Some("app:v1.2.3"), Some(&c)),
-            Some("v1.2.3".to_string())
+            Some("0.159.0".to_string())
         );
         assert_eq!(
             detect_version(Some("app:latest"), Some(&c)),
             Some("0.159.0".to_string())
         );
         let c = container(None, Some("sha256:102dbfdde2da60d2b8ec"));
+        assert_eq!(
+            detect_version(Some("app:v1.2.3"), Some(&c)),
+            Some("v1.2.3".to_string())
+        );
         assert_eq!(
             detect_version(Some("app:latest"), Some(&c)),
             Some("102dbfdde2da".to_string())
