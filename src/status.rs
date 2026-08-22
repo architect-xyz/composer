@@ -38,6 +38,10 @@ pub struct ContainerStatus {
     pub image: String,
     /// When the container was last (re)started
     pub started_at: Option<DateTime<Utc>>,
+    /// Id (sha256:...) of the image the container is running
+    pub image_id: Option<String>,
+    /// The image's `org.opencontainers.image.version` label, if set
+    pub image_version_label: Option<String>,
 }
 
 pub async fn gather_status_data(
@@ -115,6 +119,8 @@ pub async fn gather_status_data(
                     status: row.status,
                     image: row.image,
                     started_at: None,
+                    image_id: None,
+                    image_version_label: None,
                 },
             );
         }
@@ -130,6 +136,8 @@ pub async fn gather_status_data(
                 .map(|(_, service)| service);
             if let Some(container) = service.and_then(|s| status_map.get_mut(s)) {
                 container.started_at = details.started_at;
+                container.image_id = Some(details.image_id);
+                container.image_version_label = details.version_label;
             }
         }
     }
@@ -140,10 +148,15 @@ pub async fn gather_status_data(
 struct ContainerDetails {
     id: String,
     started_at: Option<DateTime<Utc>>,
+    image_id: String,
+    version_label: Option<String>,
 }
 
-/// Run `docker inspect` on the given container ids, returning the start time
-/// of each one found.  Containers that have disappeared since they
+const OCI_VERSION_LABEL: &str = "org.opencontainers.image.version";
+
+/// Run `docker inspect` on the given container ids, returning the start
+/// time, image id, and OCI version label (container labels inherit the
+/// image's labels) of each one found.  Containers that have disappeared since they
 /// were listed are skipped rather than failing the whole status.
 async fn inspect_containers<I, S>(ids: I) -> Result<Vec<ContainerDetails>>
 where
@@ -155,7 +168,9 @@ where
         .arg("--type")
         .arg("container")
         .arg("--format")
-        .arg("{{.Id}}\t{{.State.StartedAt}}")
+        .arg(format!(
+            "{{{{.Id}}}}\t{{{{.State.StartedAt}}}}\t{{{{.Image}}}}\t{{{{index .Config.Labels \"{OCI_VERSION_LABEL}\"}}}}"
+        ))
         .args(ids)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -173,7 +188,10 @@ where
             let mut parts = line.split('\t');
             let id = parts.next()?.to_string();
             let started_at = parse_docker_time(parts.next()?);
-            Some(ContainerDetails { id, started_at })
+            let image_id = parts.next()?.to_string();
+            let version_label =
+                parts.next().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+            Some(ContainerDetails { id, started_at, image_id, version_label })
         })
         .collect())
 }
@@ -225,56 +243,117 @@ fn short_uptime(status: &str) -> Option<String> {
     Some(format!("{n}{suffix}"))
 }
 
-/// Scan an image reference for a semver-shaped tag like `v1.2.3` or
-/// `v1.2.3-beta.1` and return it if present.
+/// The tag portion of an image reference, e.g. `v1.2.3` from
+/// `ghcr.io/org/app:v1.2.3@sha256:...`.  None if the reference has no tag.
+fn image_tag(image: &str) -> Option<&str> {
+    let without_digest = image.split('@').next()?;
+    // registries may carry a port (`localhost:5000/app`), so only look at
+    // the last path component for the tag separator
+    let name = without_digest.rsplit('/').next()?;
+    let (_, tag) = name.split_once(':')?;
+    (!tag.is_empty()).then_some(tag)
+}
+
+/// Find a version-shaped token in an image reference's tag.  Handles tags
+/// that are a plain version (`v1.2.3`, `3.12`), and tags that embed one
+/// after a separator (`hello-world-v1.2.3`, `bob-jones-2.0`).  Requires at
+/// least `N.N` (a lone `16` is too ambiguous); a leading `v` is kept if
+/// present.  A `-suffix` is kept only if it looks like a prerelease
+/// (`-rc.1`, `-beta`, `-20240101`), so `1.25.3-alpine` yields `1.25.3`.
 fn extract_version(image: &str) -> Option<String> {
-    let bytes = image.as_bytes();
-    let n = bytes.len();
-    let mut i = 0;
-    while i < n {
-        if bytes[i] == b'v' {
-            let boundary =
-                i == 0 || matches!(bytes[i - 1], b':' | b'/' | b'@' | b'-' | b'_' | b'.');
-            if boundary {
-                if let Some(end) = parse_semver_tail(bytes, i + 1) {
-                    return std::str::from_utf8(&bytes[i..end]).ok().map(str::to_string);
-                }
-            }
+    let tag = image_tag(image)?;
+    let bytes = tag.as_bytes();
+    for i in 0..bytes.len() {
+        let boundary = i == 0 || matches!(bytes[i - 1], b'-' | b'_' | b'+');
+        if !boundary {
+            continue;
         }
-        i += 1;
+        let start = if bytes[i] == b'v' { i + 1 } else { i };
+        if let Some(end) = parse_version_tail(bytes, start) {
+            return Some(tag[i..end].to_string());
+        }
     }
     None
 }
 
-/// Parse `N.N.N(-suffix)?` starting at `start`. Returns the end index if the
-/// parse succeeds, None otherwise.
-fn parse_semver_tail(bytes: &[u8], start: usize) -> Option<usize> {
+/// Parse `N.N(.N)*(-prerelease)?` starting at `start`.  Returns the end
+/// index if the parse succeeds, None otherwise.
+fn parse_version_tail(bytes: &[u8], start: usize) -> Option<usize> {
     let n = bytes.len();
-    let mut i = start;
-    for seg in 0..3 {
+    let digits = |mut i: usize| -> Option<usize> {
         let seg_start = i;
         while i < n && bytes[i].is_ascii_digit() {
             i += 1;
         }
-        if i == seg_start {
-            return None;
-        }
-        if seg < 2 {
-            if i >= n || bytes[i] != b'.' {
-                return None;
+        (i > seg_start).then_some(i)
+    };
+    let mut i = digits(start)?;
+    let mut segments = 1;
+    while i < n && bytes[i] == b'.' {
+        match digits(i + 1) {
+            Some(next) => {
+                i = next;
+                segments += 1;
             }
-            i += 1;
+            None => break,
         }
     }
+    if segments < 2 {
+        return None;
+    }
+    // the version must end at a separator or the end of the tag, so that
+    // e.g. `2.0abc` is not treated as a version
+    if i < n && !matches!(bytes[i], b'-' | b'_' | b'.' | b'+') {
+        return None;
+    }
+    // optional prerelease suffix
     if i < n && bytes[i] == b'-' {
-        i += 1;
-        while i < n
-            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.' || bytes[i] == b'-')
+        let mut j = i + 1;
+        while j < n
+            && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'-')
         {
-            i += 1;
+            j += 1;
+        }
+        if j > i + 1 && is_prerelease(&bytes[i + 1..j]) {
+            i = j;
         }
     }
     Some(i)
+}
+
+/// Whether a `-suffix` after a version looks like a prerelease identifier
+/// rather than an image variant (`-alpine`, `-slim`) or an unrelated name.
+fn is_prerelease(suffix: &[u8]) -> bool {
+    const WORDS: [&str; 9] =
+        ["rc", "alpha", "beta", "pre", "dev", "snapshot", "nightly", "canary", "build"];
+    if suffix.first().is_some_and(u8::is_ascii_digit) {
+        return true;
+    }
+    let s = std::str::from_utf8(suffix).unwrap_or("").to_ascii_lowercase();
+    WORDS.iter().any(|w| s.starts_with(w))
+}
+
+/// Best available version string for a service: a version parsed from the
+/// image tag, else the image's OCI version label, else the short image id
+/// of the running container.
+fn detect_version(
+    image: Option<&str>,
+    container: Option<&ContainerStatus>,
+) -> Option<String> {
+    if let Some(v) = image.and_then(extract_version) {
+        return Some(v);
+    }
+    let container = container?;
+    if let Some(v) = container.image_version_label.as_deref() {
+        return Some(v.to_string());
+    }
+    container.image_id.as_deref().map(short_image_id)
+}
+
+/// `sha256:102dbfdde2da60d2...` -> `102dbfdde2da`
+fn short_image_id(id: &str) -> String {
+    let hex = id.strip_prefix("sha256:").unwrap_or(id);
+    hex.chars().take(12).collect()
 }
 
 pub fn format_status_table(
@@ -340,11 +419,8 @@ pub fn format_status_table(
 
         // Prefer what the container is actually running; fall back to what
         // the compose file declares (e.g. for jobs, which leave no container)
-        let version = container
-            .map(|c| c.image.as_str())
-            .or(info.image.as_deref())
-            .and_then(extract_version)
-            .unwrap_or_else(|| "?".to_string());
+        let image = container.map(|c| c.image.as_str()).or(info.image.as_deref());
+        let version = detect_version(image, container).unwrap_or_else(|| "?".to_string());
         let started_at = container.and_then(|c| c.started_at);
 
         table.add_row(Row::new(vec![
@@ -424,14 +500,45 @@ mod tests {
             extract_version("registry.example.com/team/app:v2.0.0-beta.1"),
             Some("v2.0.0-beta.1".to_string())
         );
+        assert_eq!(extract_version("service:1.2.3"), Some("1.2.3".to_string()));
+        assert_eq!(extract_version("alpine:3.12"), Some("3.12".to_string()));
+        assert_eq!(extract_version("app:2024.08.22"), Some("2024.08.22".to_string()));
+        assert_eq!(extract_version("localhost:5000/app:1.2"), Some("1.2".to_string()));
+    }
+
+    #[test]
+    fn extract_version_embedded_in_tag() {
+        assert_eq!(extract_version("app:hello-world-v1.2.3"), Some("v1.2.3".to_string()));
+        assert_eq!(extract_version("app:bob-jones-2.0"), Some("2.0".to_string()));
+        assert_eq!(extract_version("app:release_1.4.0"), Some("1.4.0".to_string()));
+        assert_eq!(
+            extract_version("app:hello-world2-v1.2.3"),
+            Some("v1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_version_suffix_handling() {
+        // image variants are dropped, prereleases are kept
+        assert_eq!(extract_version("nginx:1.25.3-alpine"), Some("1.25.3".to_string()));
+        assert_eq!(extract_version("python:3.11-slim"), Some("3.11".to_string()));
+        assert_eq!(extract_version("app:v1.2.3-rc.1"), Some("v1.2.3-rc.1".to_string()));
+        assert_eq!(extract_version("app:v1.2.3-beta"), Some("v1.2.3-beta".to_string()));
+        assert_eq!(extract_version("app:2.0-20240101"), Some("2.0-20240101".to_string()));
+        assert_eq!(extract_version("app:v1.2.3-bob-jones"), Some("v1.2.3".to_string()));
     }
 
     #[test]
     fn extract_version_missing_returns_none() {
         assert_eq!(extract_version("nginx:latest"), None);
         assert_eq!(extract_version("postgres"), None);
-        assert_eq!(extract_version("service:1.2.3"), None); // no 'v' prefix
-        assert_eq!(extract_version("service:v1.2"), None); // not full semver
+        assert_eq!(extract_version("postgres:16"), None); // single number: too ambiguous
+        assert_eq!(extract_version("app:main"), None);
+        assert_eq!(extract_version("app:sha-abc1234"), None);
+        assert_eq!(extract_version("app:build-42"), None);
+        assert_eq!(extract_version("app:2.0abc"), None);
+        assert_eq!(extract_version("localhost:5000/app"), None); // port, no tag
+        assert_eq!(extract_version("my2.0app:latest"), None); // only the tag is scanned
         assert_eq!(extract_version(""), None);
     }
 
@@ -440,6 +547,45 @@ mod tests {
         // The 'v' in 'nova' should not be treated as a version prefix.
         assert_eq!(extract_version("nova:latest"), None);
         assert_eq!(extract_version("service:stable"), None);
+        assert_eq!(extract_version("app:hello-worldv1.2.3"), None); // no boundary before v
+    }
+
+    #[test]
+    fn extract_version_with_digest_suffix() {
+        // Even when a digest follows, we still surface the tag.
+        assert_eq!(
+            extract_version("nginx:v1.2.3@sha256:abc123"),
+            Some("v1.2.3".to_string())
+        );
+        assert_eq!(extract_version("nginx@sha256:abc123"), None);
+    }
+
+    fn container(label: Option<&str>, id: Option<&str>) -> ContainerStatus {
+        ContainerStatus {
+            image_version_label: label.map(str::to_string),
+            image_id: id.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn detect_version_prefers_tag_then_label_then_id() {
+        let c = container(Some("0.159.0"), Some("sha256:102dbfdde2da60d2b8ec"));
+        assert_eq!(
+            detect_version(Some("app:v1.2.3"), Some(&c)),
+            Some("v1.2.3".to_string())
+        );
+        assert_eq!(
+            detect_version(Some("app:latest"), Some(&c)),
+            Some("0.159.0".to_string())
+        );
+        let c = container(None, Some("sha256:102dbfdde2da60d2b8ec"));
+        assert_eq!(
+            detect_version(Some("app:latest"), Some(&c)),
+            Some("102dbfdde2da".to_string())
+        );
+        assert_eq!(detect_version(Some("app:latest"), None), None);
+        assert_eq!(detect_version(None, None), None);
     }
 
     #[test]
@@ -453,14 +599,5 @@ mod tests {
         assert_eq!(parse_docker_time("0001-01-01T00:00:00Z"), None);
         assert_eq!(parse_docker_time(""), None);
         assert_eq!(parse_docker_time("not a time"), None);
-    }
-
-    #[test]
-    fn extract_version_with_digest_suffix() {
-        // Even when a digest follows, we still surface the tag.
-        assert_eq!(
-            extract_version("nginx:v1.2.3@sha256:abc123"),
-            Some("v1.2.3".to_string())
-        );
     }
 }
