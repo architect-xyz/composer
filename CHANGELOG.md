@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.14](https://github.com/architect-xyz/composer/compare/v0.10.13...v0.10.14) (2026-08-22)
+
+
+### Features
+
+* add start/stop/restart commands for the installed service ([#51](https://github.com/architect-xyz/composer/issues/51)) ([6b385c7](https://github.com/architect-xyz/composer/commit/6b385c771112a768d951559e560af07faa46b4a0))
+* **install:** enable and start composer.service by default ([#43](https://github.com/architect-xyz/composer/issues/43)) ([1a0cc01](https://github.com/architect-xyz/composer/commit/1a0cc01f48d9f1783d09b633b49f224e55bbc881))
+* **scheduler:** per-service pull policy for scheduled runs ([#22](https://github.com/architect-xyz/composer/issues/22)) ([1a705f5](https://github.com/architect-xyz/composer/commit/1a705f57c084fe780dbfcc6b5db92897591c8ed8))
+* **status:** show last start time and smarter version detection ([#50](https://github.com/architect-xyz/composer/issues/50)) ([908bced](https://github.com/architect-xyz/composer/commit/908bced5367c21c6baea150f61b64cbab6cbc31e))
+
+
+### Bug Fixes
+
+* redact environment values from compose config debug logs ([#49](https://github.com/architect-xyz/composer/issues/49)) ([9bf6391](https://github.com/architect-xyz/composer/commit/9bf639179c75e59dcdbb1568697a3dfe67ffdfb8))
+
 ## [0.10.13](https://github.com/architect-xyz/composer/compare/v0.10.12...v0.10.13) (2026-08-06)
 
 
