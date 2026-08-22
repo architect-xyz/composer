@@ -15,6 +15,7 @@ mod compose_types;
 mod container_monitor;
 mod install_commands;
 mod scheduler;
+mod service_commands;
 mod status;
 mod status_command;
 mod status_server;
@@ -110,6 +111,12 @@ enum Commands {
     Uninstall,
     /// Update composer to the latest version
     Update,
+    /// Start the installed composer service (systemd or launchd)
+    Start,
+    /// Stop the installed composer service (systemd or launchd)
+    Stop,
+    /// Restart the installed composer service (systemd or launchd)
+    Restart,
 }
 
 const COMPOSE_FILE_CANDIDATES: &[&str] =
@@ -200,6 +207,15 @@ async fn main() -> Result<()> {
             Commands::Install(command) => install_commands::install(command),
             Commands::Uninstall => install_commands::uninstall(),
             Commands::Update => install_commands::update(),
+            Commands::Start => {
+                service_commands::control(service_commands::ServiceAction::Start)
+            }
+            Commands::Stop => {
+                service_commands::control(service_commands::ServiceAction::Stop)
+            }
+            Commands::Restart => {
+                service_commands::control(service_commands::ServiceAction::Restart)
+            }
         };
     }
     let project_directory = args.project_directory.clone();
