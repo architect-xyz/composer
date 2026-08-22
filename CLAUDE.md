@@ -86,6 +86,7 @@ cargo run -- -f /path/to/compose.yml --run-logs ./logs
 - `co.architect.composer.restart`: Cron expression for restarting service
 - `co.architect.composer.notify.slack`: Enable Slack notifications (true/1)
 - `co.architect.composer.notify.slack.on-error`: Enable error-only Slack notifications
+- `co.architect.composer.pull`: Pull policy for scheduled runs (`always`/`missing`/`never`), passed as `docker compose run --pull`
 
 ## Dependencies
 

@@ -149,6 +149,20 @@ fn resolve_compose_file(explicit: Option<PathBuf>) -> Result<PathBuf> {
 
 const RUN_KEY: &str = "co.architect.composer.run";
 const RESTART_KEY: &str = "co.architect.composer.restart";
+const PULL_KEY: &str = "co.architect.composer.pull";
+
+/// Validate a `co.architect.composer.pull` label value, which is passed
+/// straight through as `docker compose run --pull <policy>`.
+fn parse_pull_policy(value: &str) -> Result<&'static str> {
+    match value.trim() {
+        "always" => Ok("always"),
+        "missing" => Ok("missing"),
+        "never" => Ok("never"),
+        other => bail!(
+            "invalid {PULL_KEY} value {other:?}: expected one of always, missing, never"
+        ),
+    }
+}
 
 /// Check if a label key is a schedule label and return the corresponding action
 /// and optional schedule name (the suffix after the base key).
@@ -480,6 +494,13 @@ fn run_tasks(
                     .map(|tz_str| tz_str.parse::<Tz>())
                     .transpose()?
                     .unwrap_or(chrono_tz::UTC);
+                let pull_policy = labels
+                    .get(PULL_KEY)
+                    .map(|v| parse_pull_policy(v))
+                    .transpose()
+                    .with_context(|| {
+                        format!("while parsing labels for service {name}")
+                    })?;
 
                 for (key, value) in labels {
                     let (action, schedule_name) = match get_schedule_action(key) {
@@ -507,6 +528,7 @@ fn run_tasks(
                             schedule_timezone,
                             name.clone(),
                             schedule_name.map(|s| s.to_owned()),
+                            pull_policy,
                             run_logs.clone(),
                             maybe_slack_webhook_url.clone(),
                             maybe_slack_webhook_on_error_url.clone(),
@@ -550,6 +572,7 @@ async fn run_on_schedule(
     schedule_timezone: Tz,
     service: String,
     schedule_name: Option<String>,
+    pull_policy: Option<&'static str>,
     run_logs: Option<PathBuf>,
     slack_webhook_url: Option<String>,
     slack_webhook_on_error_url: Option<String>,
@@ -607,8 +630,17 @@ async fn run_on_schedule(
             }
         }
         match action {
-            ComposeAction::Run => cmd.arg("run").arg("--rm"),
-            ComposeAction::Restart => cmd.arg("restart"),
+            ComposeAction::Run => {
+                cmd.arg("run").arg("--rm");
+                // compose pulls missing images on its own; the label lets a
+                // service opt into always refreshing (or never pulling)
+                if let Some(pull_policy) = pull_policy {
+                    cmd.arg("--pull").arg(pull_policy);
+                }
+            }
+            ComposeAction::Restart => {
+                cmd.arg("restart");
+            }
         };
         let child = match cmd.arg(&service).spawn() {
             Ok(child) => child,
@@ -704,4 +736,22 @@ async fn notify_slack(
         return Err(anyhow!("{err_body}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pull_policy_accepts_compose_values() {
+        assert_eq!(parse_pull_policy("always").unwrap(), "always");
+        assert_eq!(parse_pull_policy("missing").unwrap(), "missing");
+        assert_eq!(parse_pull_policy(" never ").unwrap(), "never");
+    }
+
+    #[test]
+    fn pull_policy_rejects_unknown_values() {
+        assert!(parse_pull_policy("true").is_err());
+        assert!(parse_pull_policy("").is_err());
+    }
 }
