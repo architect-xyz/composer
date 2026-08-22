@@ -3,7 +3,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Local, Utc};
 use log::debug;
 use prettytable_rs::{color, format, row, Attr, Cell, Row, Table};
-use std::{collections::BTreeMap, process::Stdio};
+use regex::Regex;
+use std::{collections::BTreeMap, process::Stdio, sync::LazyLock};
 use term::terminfo::{TermInfo, TerminfoTerminal};
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
@@ -254,83 +255,34 @@ fn image_tag(image: &str) -> Option<&str> {
     (!tag.is_empty()).then_some(tag)
 }
 
-/// Find a version-shaped token in an image reference's tag.  Handles tags
-/// that are a plain version (`v1.2.3`, `3.12`), and tags that embed one
-/// after a separator (`hello-world-v1.2.3`, `bob-jones-2.0`).  Requires at
-/// least `N.N` (a lone `16` is too ambiguous); a leading `v` is kept if
-/// present.  A `-suffix` is kept only if it looks like a prerelease
-/// (`-rc.1`, `-beta`, `-20240101`), so `1.25.3-alpine` yields `1.25.3`.
+/// Matches a version-shaped token in an image tag.  Handles tags that are a
+/// plain version (`v1.2.3`, `3.12`) and tags that embed one after a
+/// separator (`hello-world-v1.2.3`, `bob-jones-2.0`).
+static TAG_VERSION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?x)
+        (?:^|[-_+])                 # preceded by the start of the tag or a separator
+        (
+            v?\d+(?:\.\d+)+          # N.N(.N)*; at least two segments, optional leading v
+            (?:                     # optional prerelease suffix: -rc.1, -beta, -20240101
+                -(?:\d|(?i:rc|alpha|beta|pre|dev|snapshot|nightly|canary|build))
+                [A-Za-z0-9.-]*
+            )?
+        )
+        (?:$|[-_+.])                # followed by the end of the tag or a separator
+        ",
+    )
+    .expect("TAG_VERSION regex is valid")
+});
+
+/// Find a version-shaped token in an image reference's tag (see
+/// [`TAG_VERSION`]).  Requires at least `N.N` (a lone `16` is too
+/// ambiguous); a leading `v` is kept if present.  A `-suffix` is kept only
+/// if it looks like a prerelease, so `1.25.3-alpine` yields `1.25.3` while
+/// `v1.2.3-rc.1` is kept whole.
 fn extract_version(image: &str) -> Option<String> {
     let tag = image_tag(image)?;
-    let bytes = tag.as_bytes();
-    for i in 0..bytes.len() {
-        let boundary = i == 0 || matches!(bytes[i - 1], b'-' | b'_' | b'+');
-        if !boundary {
-            continue;
-        }
-        let start = if bytes[i] == b'v' { i + 1 } else { i };
-        if let Some(end) = parse_version_tail(bytes, start) {
-            return Some(tag[i..end].to_string());
-        }
-    }
-    None
-}
-
-/// Parse `N.N(.N)*(-prerelease)?` starting at `start`.  Returns the end
-/// index if the parse succeeds, None otherwise.
-fn parse_version_tail(bytes: &[u8], start: usize) -> Option<usize> {
-    let n = bytes.len();
-    let digits = |mut i: usize| -> Option<usize> {
-        let seg_start = i;
-        while i < n && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-        (i > seg_start).then_some(i)
-    };
-    let mut i = digits(start)?;
-    let mut segments = 1;
-    while i < n && bytes[i] == b'.' {
-        match digits(i + 1) {
-            Some(next) => {
-                i = next;
-                segments += 1;
-            }
-            None => break,
-        }
-    }
-    if segments < 2 {
-        return None;
-    }
-    // the version must end at a separator or the end of the tag, so that
-    // e.g. `2.0abc` is not treated as a version
-    if i < n && !matches!(bytes[i], b'-' | b'_' | b'.' | b'+') {
-        return None;
-    }
-    // optional prerelease suffix
-    if i < n && bytes[i] == b'-' {
-        let mut j = i + 1;
-        while j < n
-            && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'.' || bytes[j] == b'-')
-        {
-            j += 1;
-        }
-        if j > i + 1 && is_prerelease(&bytes[i + 1..j]) {
-            i = j;
-        }
-    }
-    Some(i)
-}
-
-/// Whether a `-suffix` after a version looks like a prerelease identifier
-/// rather than an image variant (`-alpine`, `-slim`) or an unrelated name.
-fn is_prerelease(suffix: &[u8]) -> bool {
-    const WORDS: [&str; 9] =
-        ["rc", "alpha", "beta", "pre", "dev", "snapshot", "nightly", "canary", "build"];
-    if suffix.first().is_some_and(u8::is_ascii_digit) {
-        return true;
-    }
-    let s = std::str::from_utf8(suffix).unwrap_or("").to_ascii_lowercase();
-    WORDS.iter().any(|w| s.starts_with(w))
+    TAG_VERSION.captures(tag).map(|c| c[1].to_string())
 }
 
 /// Best available version string for a service: a version parsed from the
