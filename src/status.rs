@@ -190,11 +190,19 @@ where
             let id = parts.next()?.to_string();
             let started_at = parse_docker_time(parts.next()?);
             let image_id = parts.next()?.to_string();
-            let version_label =
-                parts.next().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+            let version_label = parts.next().and_then(parse_label_value);
             Some(ContainerDetails { id, started_at, image_id, version_label })
         })
         .collect())
+}
+
+/// Parse a label value as emitted by a docker inspect `--format` template.
+/// A missing label renders as the literal `<no value>` on engines where the
+/// lookup yields a nil interface, and as an empty string on others; both
+/// mean the label is not set.
+fn parse_label_value(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty() && s != "<no value>").then(|| s.to_string())
 }
 
 /// Parse an RFC 3339 timestamp as emitted by docker inspect.  Docker uses
@@ -541,6 +549,15 @@ mod tests {
         );
         assert_eq!(detect_version(Some("app:latest"), None), None);
         assert_eq!(detect_version(None, None), None);
+    }
+
+    #[test]
+    fn parse_label_value_missing_forms() {
+        assert_eq!(parse_label_value("0.159.0"), Some("0.159.0".to_string()));
+        assert_eq!(parse_label_value(" v1.2.3 "), Some("v1.2.3".to_string()));
+        assert_eq!(parse_label_value(""), None);
+        assert_eq!(parse_label_value("  "), None);
+        assert_eq!(parse_label_value("<no value>"), None);
     }
 
     #[test]
