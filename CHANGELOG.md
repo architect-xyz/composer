@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.15](https://github.com/architect-xyz/composer/compare/v0.10.14...v0.10.15) (2026-08-27)
+
+
+### Bug Fixes
+
+* **status:** treat docker's "&lt;no value&gt;" as a missing version label ([#61](https://github.com/architect-xyz/composer/issues/61)) ([c541cf8](https://github.com/architect-xyz/composer/commit/c541cf8006cb0fd97b90ca63b5d237fe956eeaba))
+
 ## [0.10.14](https://github.com/architect-xyz/composer/compare/v0.10.13...v0.10.14) (2026-08-22)
 
 
