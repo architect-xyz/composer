@@ -135,17 +135,18 @@ services:
 Cron expressions are Quartz-compatible (6 fields, seconds first):
 `seconds minutes hours day-of-month month day-of-week`
 
-Classic 5-field crontab expressions (`minutes hours day-of-month month
-day-of-week`) are accepted too and fire at second 0, so `0 2 * * *` and
-`0 0 2 * * *` are equivalent. Two crontab habits are refused in 5-field
-form rather than silently reinterpreted, because Quartz means something
-different by them:
+Composer also accepts 5-field crontab expressions (`minutes hours
+day-of-month month day-of-week`). They run at second 0, so `0 2 * * *` and
+`0 0 2 * * *` are equivalent.
 
-- **Numeric days of week.** crontab counts `0` (or `7`) as Sunday and `1`
-  as Monday; Quartz counts `1` as Sunday. Name the days instead:
-  `0 2 * * MON-FRI`.
-- **Restricting both day-of-month and day-of-week.** crontab fires when
-  either matches; composer fires only when both do. Use two schedule labels.
+Two crontab forms are rejected in 5-field expressions because Quartz reads
+them differently:
+
+- **Numeric days of week.** In crontab, `0` and `7` are Sunday and `1` is
+  Monday. In Quartz, `1` is Sunday. Use names: `0 2 * * MON-FRI`.
+- **Both day-of-month and day-of-week set.** crontab runs when either
+  matches. Composer runs only when both match. Use two schedule labels
+  instead.
 
 ### Multiple schedules
 
