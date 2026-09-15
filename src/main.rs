@@ -6,7 +6,10 @@ use clap::{Parser, Subcommand};
 use cron::Schedule;
 use log::{debug, error, info, warn};
 use serde_json::json;
-use std::{fs::File, path::PathBuf};
+use std::{
+    fs::File,
+    path::{Path, PathBuf},
+};
 use tokio::task::JoinSet;
 
 mod certificate_monitor;
@@ -182,6 +185,28 @@ fn get_schedule_action(key: &str) -> Option<(ComposeAction, Option<&str>)> {
     }
 }
 
+/// Announce that the scheduler is starting before anything touches the
+/// filesystem or spawns docker.  The first lines are deliberately free of
+/// syscalls that can block (on macOS, `getcwd` and `open` under a working
+/// directory like `~/Documents` wait on a TCC consent prompt), so that a
+/// process stuck there leaves a marker in the log instead of looking dead.
+fn log_startup_banner(compose_file: Option<&Path>) {
+    let compose_file = match compose_file {
+        Some(path) => path.display().to_string(),
+        None => format!("auto-detect ({})", COMPOSE_FILE_CANDIDATES.join(", ")),
+    };
+    info!(
+        "composer v{} starting (pid {}), compose file: {compose_file}",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    );
+    // getcwd may block; logged separately so the line above always lands first
+    match std::env::current_dir() {
+        Ok(cwd) => info!("working directory: {}", cwd.display()),
+        Err(e) => warn!("could not determine working directory: {e:?}"),
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     env_logger::init();
@@ -232,6 +257,7 @@ async fn main() -> Result<()> {
             Commands::Update => install_commands::update(),
         };
     }
+    log_startup_banner(args.compose_file.as_deref());
     let project_directory = args.project_directory.clone();
     let run_logs = args.run_logs.clone();
     if let Some(run_logs) = run_logs.as_ref() {
