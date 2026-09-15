@@ -11,6 +11,29 @@ use std::{collections::BTreeMap, process::Stdio, sync::LazyLock};
 use term::terminfo::{TermInfo, TerminfoTerminal};
 
 const RUN_KEYS: [&str; 1] = ["co.architect.composer.run"];
+/// Label declaring whether a service is expected to be running: `up` (the
+/// default for services without a profile) or `manual` (only ever started by
+/// hand, e.g. a `docker compose run --rm` template; DOWN is informational).
+pub const EXPECT_KEY: &str = "co.architect.composer.expect";
+
+/// Valid values of [`EXPECT_KEY`].
+pub const EXPECT_VALUES: [&str; 2] = ["up", "manual"];
+
+/// Whether a non-running service should be flagged (red DOWN) or merely
+/// noted (dim DOWN).  The label decides when present; otherwise services
+/// behind a profile default to "not expected", since compose won't start
+/// them in the default profile anyway.
+pub fn expected_up(
+    labels: Option<&BTreeMap<String, String>>,
+    profiles: Option<&[String]>,
+) -> bool {
+    match labels.and_then(|l| l.get(EXPECT_KEY)).map(|v| v.trim()) {
+        Some("up") => true,
+        Some("manual") => false,
+        // unknown values are reported by the scheduler at startup
+        _ => profiles.is_none_or(|p| p.is_empty()),
+    }
+}
 
 #[derive(Debug)]
 pub struct ServiceInfo {
@@ -21,6 +44,8 @@ pub struct ServiceInfo {
     pub image: Option<String>,
     /// When composer itself last ran or restarted this service
     pub history: RunHistory,
+    /// Whether DOWN is a problem (true) or expected (false); see [`EXPECT_KEY`]
+    pub expect_up: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -90,6 +115,10 @@ pub async fn gather_status_data(
                 service_type: service_type.to_string(),
                 image: service.image.clone(),
                 history: last_run::history(last_runs.as_ref(), name),
+                expect_up: expected_up(
+                    service.labels.as_ref(),
+                    service.profiles.as_deref(),
+                ),
             });
         }
     }
@@ -472,16 +501,20 @@ pub fn format_status_table(
             .and_then(|c| short_uptime(&c.status));
 
         let is_running = raw_state == Some("running");
-        let (label, color) = if info.service_type == "job" {
+        let (label, style) = if info.service_type == "job" {
             if is_running {
-                ("JOB_RUNNING", Some(color::GREEN))
+                ("JOB_RUNNING", Some(Attr::ForegroundColor(color::GREEN)))
             } else {
                 ("JOB", None)
             }
         } else if is_running {
-            ("UP", Some(color::GREEN))
+            ("UP", Some(Attr::ForegroundColor(color::GREEN)))
+        } else if info.expect_up {
+            ("DOWN", Some(Attr::ForegroundColor(color::RED)))
         } else {
-            ("DOWN", Some(color::RED))
+            // expected to be down: informational, not an alert.  Dim falls
+            // back to plain text on terminals without the capability.
+            ("DOWN", Some(Attr::Dim))
         };
 
         let status_text = match uptime {
@@ -489,8 +522,8 @@ pub fn format_status_table(
             None => label.to_string(),
         };
         let mut status_cell = Cell::new(&status_text);
-        if let Some(c) = color {
-            status_cell = status_cell.with_style(Attr::ForegroundColor(c));
+        if let Some(style) = style {
+            status_cell = status_cell.with_style(style);
         }
 
         table.add_row(Row::new(vec![
@@ -743,6 +776,7 @@ mod tests {
             service_type: service_type.to_string(),
             image: image.map(str::to_string),
             history,
+            expect_up: true,
         }
     }
 
@@ -893,6 +927,29 @@ mod tests {
         assert_eq!(format_time_in(dt, &kolkata), "2026-08-22 02:28 +05:30");
         assert_eq!(format_time_in(dt, &Utc), "2026-08-21 20:58 +00:00");
         assert_eq!(format_time_in(None, &Utc), UNKNOWN);
+    }
+
+    fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn expected_up_defaults_by_profile() {
+        assert!(expected_up(None, None));
+        assert!(expected_up(Some(&labels(&[])), Some(&[])));
+        assert!(!expected_up(None, Some(&["build".to_string()])));
+    }
+
+    #[test]
+    fn expected_up_label_overrides_default() {
+        let manual = labels(&[(EXPECT_KEY, "manual")]);
+        assert!(!expected_up(Some(&manual), None));
+        let up = labels(&[(EXPECT_KEY, " up ")]);
+        assert!(expected_up(Some(&up), Some(&["build".to_string()])));
+        // unknown values fall back to the default rule
+        let bogus = labels(&[(EXPECT_KEY, "sometimes")]);
+        assert!(expected_up(Some(&bogus), None));
+        assert!(!expected_up(Some(&bogus), Some(&["build".to_string()])));
     }
 
     #[test]
