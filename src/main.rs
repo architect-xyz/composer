@@ -14,6 +14,7 @@ mod compose;
 mod compose_types;
 mod container_monitor;
 mod install_commands;
+mod last_run;
 mod scheduler;
 mod service_commands;
 mod status;
@@ -349,6 +350,8 @@ async fn main() -> Result<()> {
     'outer: loop {
         info!("compose config reloaded");
         info!("starting scheduler...");
+        // so `composer status` can report `never` for jobs that haven't fired
+        last_run::register_project(&context);
         let mut tasks = run_tasks(
             &context,
             &compose,
@@ -642,10 +645,12 @@ async fn run_on_schedule(
                 cmd.arg("restart");
             }
         };
+        last_run::record_started(&context, &service, action, now);
         let child = match cmd.arg(&service).spawn() {
             Ok(child) => child,
             Err(e) => {
                 error!("error {} {service_display}: {e}", action.as_gerund());
+                last_run::record_finished(&context, &service, Utc::now(), false);
                 continue;
             }
         };
@@ -653,9 +658,11 @@ async fn run_on_schedule(
             Ok(out) => out,
             Err(e) => {
                 error!("error while {} {service_display}: {e}", action.as_gerund());
+                last_run::record_finished(&context, &service, Utc::now(), false);
                 continue;
             }
         };
+        last_run::record_finished(&context, &service, Utc::now(), out.status.success());
         if run_logs.is_none() {
             let stdout_s = std::str::from_utf8(&out.stdout).unwrap_or("<invalid utf-8>");
             let stderr_s = std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>");
