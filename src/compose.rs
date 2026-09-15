@@ -1,7 +1,54 @@
 use crate::compose_types;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::{debug, error, log_enabled};
 use std::path::PathBuf;
+
+/// Describe a failure to run `program`.  The OS reports a missing executable
+/// as a bare "No such file or directory", which reads like a missing config
+/// file; name the binary and the PATH that was searched instead.
+pub fn spawn_error(program: &str, e: std::io::Error) -> anyhow::Error {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        anyhow!("`{program}` not found on PATH (PATH={})", current_path())
+    } else {
+        anyhow::Error::new(e).context(format!("failed to run `{program}`"))
+    }
+}
+
+/// Locate the `docker` executable on PATH so a misconfigured environment
+/// (e.g. launchd's default PATH, which lacks /usr/local/bin) fails at
+/// startup with a clear message instead of at the first scheduled tick.
+pub fn find_docker() -> Result<PathBuf> {
+    find_on_path("docker")
+}
+
+fn find_on_path(program: &str) -> Result<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = dir.join(program);
+        if is_executable(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    bail!("`{program}` not found on PATH (PATH={})", current_path())
+}
+
+fn current_path() -> String {
+    std::env::var("PATH").unwrap_or_default()
+}
+
+#[cfg(unix)]
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
+}
 
 #[derive(Clone, Debug)]
 pub struct ComposeContext {
@@ -67,7 +114,8 @@ pub async fn _load_compose_profiles(context: &ComposeContext) -> Result<Vec<Stri
         .arg("--profiles")
         .output()
         .await
-        .with_context(|| "docker compose config --profiles")?;
+        .map_err(|e| spawn_error("docker", e))
+        .context("docker compose config --profiles")?;
     let out_s = std::str::from_utf8(&out.stdout)?;
     let profiles: Vec<String> = out_s.lines().map(|line| line.to_owned()).collect();
     Ok(profiles)
@@ -79,8 +127,12 @@ pub async fn load_compose_config<S: AsRef<str>>(
 ) -> Result<compose_types::Compose> {
     let mut cmd = compose_command(context, profile);
     debug!("compose command context: {context:?}");
-    let out =
-        cmd.arg("config").output().await.with_context(|| "docker compose config")?;
+    let out = cmd
+        .arg("config")
+        .output()
+        .await
+        .map_err(|e| spawn_error("docker", e))
+        .context("docker compose config")?;
     let stderr_s = std::str::from_utf8(&out.stderr).unwrap_or("<invalid utf-8>");
     if log_enabled!(log::Level::Debug) {
         // never log the raw config: it contains resolved environment
@@ -201,5 +253,37 @@ services:
         let raw = b"services:\n  app:\n    image: alpine\n  other: null\n";
         let out = redact_compose_config(raw);
         assert!(out.contains("image: alpine"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[test]
+    fn not_found_names_the_binary_and_path() {
+        let e = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let msg = spawn_error("docker", e).to_string();
+        assert!(msg.starts_with("`docker` not found on PATH (PATH="), "{msg}");
+    }
+
+    #[test]
+    fn other_errors_keep_the_os_message() {
+        let e = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let msg = format!("{:?}", spawn_error("docker", e));
+        assert!(msg.contains("failed to run `docker`"), "{msg}");
+        assert!(msg.contains("permission denied"), "{msg}");
+    }
+
+    #[test]
+    fn find_on_path_reports_missing_binary() {
+        let msg =
+            find_on_path("definitely-not-a-real-binary-1234").unwrap_err().to_string();
+        assert!(msg.contains("not found on PATH (PATH="), "{msg}");
+    }
+
+    #[test]
+    fn find_on_path_locates_sh() {
+        assert!(find_on_path("sh").unwrap().ends_with("sh"));
     }
 }

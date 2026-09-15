@@ -1,4 +1,4 @@
-use crate::compose::{compose_command, ComposeContext};
+use crate::compose::{compose_command, spawn_error, ComposeContext};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Local, Utc};
 use log::debug;
@@ -99,7 +99,11 @@ pub async fn gather_status_data(
         .arg("json")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let cmd_out = cmd.output().await.context("running docker compose ps")?;
+    let cmd_out = cmd
+        .output()
+        .await
+        .map_err(|e| spawn_error("docker", e))
+        .context("running docker compose ps")?;
     if !cmd_out.status.success() {
         let stderr = String::from_utf8_lossy(&cmd_out.stderr);
         bail!("docker compose ps failed: {stderr}");
@@ -175,7 +179,11 @@ where
         .args(ids)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let out = cmd.output().await.context("running docker inspect")?;
+    let out = cmd
+        .output()
+        .await
+        .map_err(|e| spawn_error("docker", e))
+        .context("running docker inspect")?;
     if !out.status.success() {
         // partial output is still usable; docker prints an error per
         // missing container but inspects the rest

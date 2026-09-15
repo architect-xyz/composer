@@ -216,6 +216,7 @@ async fn main() -> Result<()> {
                 service_commands::control(service_commands::ServiceAction::Start)
             }
             Commands::Status => {
+                find_docker()?;
                 let compose_file = resolve_compose_file(args.compose_file)?;
                 let context = ComposeContext {
                     compose_file,
@@ -262,6 +263,9 @@ async fn main() -> Result<()> {
     let container_monitor =
         args.container_monitor.is_some_and(|v| v == "true" || v == "1");
     let compose_file = std::fs::canonicalize(resolve_compose_file(args.compose_file)?)?;
+    // fail fast with a clear message rather than at the first docker spawn
+    let docker = find_docker()?;
+    info!("using docker at {}", docker.display());
     let context = ComposeContext {
         compose_file,
         env_file: args.env_file.map(|f| f.to_owned()),
@@ -645,7 +649,8 @@ async fn run_on_schedule(
         let child = match cmd.arg(&service).spawn() {
             Ok(child) => child,
             Err(e) => {
-                error!("error {} {service_display}: {e}", action.as_gerund());
+                let e = spawn_error("docker", e);
+                error!("error {} {service_display}: {e:?}", action.as_gerund());
                 continue;
             }
         };

@@ -1,4 +1,4 @@
-use crate::compose::ComposeContext;
+use crate::compose::{spawn_error, ComposeContext};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use log::{error, trace};
@@ -47,7 +47,7 @@ pub async fn run(
             .arg("json")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let cmd_out = cmd.output().await?;
+        let cmd_out = cmd.output().await.map_err(|e| spawn_error("docker", e))?;
         let std_out = String::from_utf8_lossy(&cmd_out.stdout);
         let mut rows = BTreeMap::new();
         for line in std_out.lines() {
