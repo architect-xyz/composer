@@ -1,4 +1,4 @@
-use crate::compose::ComposeContext;
+use crate::compose::{spawn_error, ComposeContext};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
@@ -40,7 +40,8 @@ pub async fn run_command_on_schedule(
         let child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
-                error!("error for {action}: {e}");
+                let e = spawn_error(command, e);
+                error!("error for {action}: {e:?}");
                 if let Some(url) = slack_webhook_on_error_url.as_deref() {
                     if let Err(e) = notify_slack(
                         url,
