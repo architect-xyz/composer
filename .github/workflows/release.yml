@@ -51,6 +51,12 @@ jobs:
       - name: Extract version from Cargo.toml
         id: version
         run: echo "version=v$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> "$GITHUB_OUTPUT"
+      # composer <= v0.10.12 self-updates by fetching composer-macos-*; keep
+      # those names as aliases so `composer update` on old installs still works
+      - name: Alias legacy macOS asset names
+        run: |
+          cp composer-darwin-amd64/composer-darwin-amd64 composer-macos-amd64
+          cp composer-darwin-arm64/composer-darwin-arm64 composer-macos-arm64
       - name: Upload release assets
         run: |
           gh release upload "${{ steps.version.outputs.version }}" \
@@ -58,6 +64,8 @@ jobs:
             composer-linux-arm64/composer-linux-arm64 \
             composer-darwin-amd64/composer-darwin-amd64 \
             composer-darwin-arm64/composer-darwin-arm64 \
+            composer-macos-amd64 \
+            composer-macos-arm64 \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
