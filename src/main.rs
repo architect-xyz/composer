@@ -209,7 +209,10 @@ fn log_startup_banner(compose_file: Option<&Path>) {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    env_logger::init();
+    // log scheduler activity by default; deployed instances (launchd,
+    // systemd, docker) rarely set RUST_LOG and must not look dead
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .init();
     let args = Cli::parse();
     let hostname = args.hostname.unwrap_or_else(|| {
         hostname::get()
