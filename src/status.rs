@@ -295,7 +295,12 @@ fn extract_version(image: &str) -> Option<String> {
 
 /// Best available version string for a service: the image's OCI version
 /// label (the image's own claim about itself), else a version parsed from
-/// the image tag, else the short image id of the running container.
+/// the image tag, else the literal tag (`latest`, `main`), else the short
+/// image id of the running container.
+///
+/// A floating tag is shown together with the short image id when there is
+/// a container, e.g. `latest (102dbfdde2da)`: the tag says the service
+/// tracks the registry, the id makes two hosts on `latest` comparable.
 fn detect_version(
     image: Option<&str>,
     container: Option<&ContainerStatus>,
@@ -306,7 +311,14 @@ fn detect_version(
     if let Some(v) = image.and_then(extract_version) {
         return Some(v);
     }
-    container?.image_id.as_deref().map(short_image_id)
+    let tag = image.and_then(image_tag);
+    let image_id = container.and_then(|c| c.image_id.as_deref()).map(short_image_id);
+    match (tag, image_id) {
+        (Some(tag), Some(id)) => Some(format!("{tag} ({id})")),
+        (Some(tag), None) => Some(tag.to_string()),
+        (None, Some(id)) => Some(id),
+        (None, None) => None,
+    }
 }
 
 /// `sha256:102dbfdde2da60d2...` -> `102dbfdde2da`
@@ -545,10 +557,40 @@ mod tests {
         );
         assert_eq!(
             detect_version(Some("app:latest"), Some(&c)),
+            Some("latest (102dbfdde2da)".to_string())
+        );
+        assert_eq!(detect_version(Some("app:latest"), None), Some("latest".to_string()));
+        assert_eq!(detect_version(None, None), None);
+    }
+
+    #[test]
+    fn detect_version_falls_back_to_literal_tag() {
+        let c = container(None, Some("sha256:102dbfdde2da60d2b8ec"));
+        // non-semver tags are shown as-is, with the image id when running
+        assert_eq!(detect_version(Some("app:main"), None), Some("main".to_string()));
+        assert_eq!(
+            detect_version(Some("app:sha-abc1234"), Some(&c)),
+            Some("sha-abc1234 (102dbfdde2da)".to_string())
+        );
+        assert_eq!(
+            detect_version(Some("ironsh/iron-proxy:latest"), Some(&c)),
+            Some("latest (102dbfdde2da)".to_string())
+        );
+        // a semver-shaped tag is still reduced to the version alone
+        assert_eq!(
+            detect_version(Some("nginx:1.25.3-alpine"), Some(&c)),
+            Some("1.25.3".to_string())
+        );
+        // no tag at all: docker implies latest, but only the id is certain
+        assert_eq!(
+            detect_version(Some("postgres"), Some(&c)),
             Some("102dbfdde2da".to_string())
         );
-        assert_eq!(detect_version(Some("app:latest"), None), None);
-        assert_eq!(detect_version(None, None), None);
+        assert_eq!(detect_version(Some("postgres"), None), None);
+        assert_eq!(
+            detect_version(Some("app@sha256:abcdef"), Some(&c)),
+            Some("102dbfdde2da".to_string())
+        );
     }
 
     #[test]
