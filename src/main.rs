@@ -24,8 +24,9 @@ mod system_monitor;
 /// Scheduler for docker-compose services
 ///
 /// Add the `co.architect.composer.run` or `co.architect.composer.restart`
-/// labels to your services with a cron expression (Quartz-compatible, e.g.
-/// seconds field is first) to schedule runs or restarts.
+/// labels to your services with a cron expression to schedule runs or
+/// restarts.  Both the Quartz form (6 fields, seconds first) and the classic
+/// 5-field crontab form (minutes first, fires at second 0) are accepted.
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -320,9 +321,7 @@ async fn main() -> Result<()> {
 
     // add pruning tasks
     if let Some(prune_images) = prune_images {
-        let schedule: Schedule = prune_images
-            .parse()
-            .with_context(|| format!("while parsing cron expression: {prune_images}"))?;
+        let schedule = scheduler::parse_schedule(&prune_images)?;
         aux_tasks.spawn(scheduler::run_command_on_schedule(
             context.clone(),
             schedule,
@@ -515,9 +514,8 @@ fn run_tasks(
                         None => continue,
                     };
                     if value != "manual" {
-                        let schedule: Schedule = value.parse().with_context(|| {
-                            format!("while parsing cron expression: {value}")
-                        })?;
+                        let schedule = scheduler::parse_schedule(value)
+                            .with_context(|| format!("service {name}, label {key}"))?;
                         let schedule_name_display =
                             schedule_name.map(|s| format!(" ({s})")).unwrap_or_default();
                         info!("service {name} has a {action} schedule{schedule_name_display}: {schedule} ({schedule_timezone})");

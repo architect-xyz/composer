@@ -135,6 +135,10 @@ services:
 Cron expressions are Quartz-compatible (6 fields, seconds first):
 `seconds minutes hours day-of-month month day-of-week`
 
+Classic 5-field crontab expressions (`minutes hours day-of-month month
+day-of-week`) are accepted too and fire at second 0, so `0 2 * * *` and
+`0 0 2 * * *` are equivalent.
+
 ### Multiple schedules
 
 A service can have multiple schedules using suffixed labels:

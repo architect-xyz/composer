@@ -7,6 +7,21 @@ use log::{error, info, warn};
 use serde_json::json;
 use std::process::Stdio;
 
+/// Parse a cron expression.  The `cron` crate wants the Quartz form, with a
+/// seconds field first (6 fields, or 7 with a trailing year).  The classic
+/// crontab form has 5 fields (`minute hour day-of-month month day-of-week`)
+/// and is unambiguous by its field count alone, so it is accepted too and
+/// fires at second 0.  Shorthands like `@daily` pass straight through.
+pub fn parse_schedule(expr: &str) -> Result<Schedule> {
+    let expr = expr.trim();
+    let normalized = if expr.split_whitespace().count() == 5 {
+        format!("0 {expr}")
+    } else {
+        expr.to_string()
+    };
+    normalized.parse().with_context(|| format!("while parsing cron expression: {expr}"))
+}
+
 pub async fn run_command_on_schedule(
     context: ComposeContext,
     schedule: Schedule,
@@ -183,6 +198,45 @@ mod tests {
                 actual_str, *expected_str,
                 "mismatch at index {i}: expected {expected_str}, got {actual_str}",
             );
+        }
+    }
+
+    #[test]
+    fn five_field_expressions_fire_at_second_zero() {
+        let start = Utc.with_ymd_and_hms(2026, 3, 6, 12, 0, 30).unwrap();
+        let upcoming = |expr: &str| -> Vec<String> {
+            parse_schedule(expr)
+                .unwrap()
+                .after(&start)
+                .take(3)
+                .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                .collect()
+        };
+        assert_eq!(upcoming("0 2 * * *"), upcoming("0 0 2 * * *"));
+        assert_eq!(
+            upcoming("*/15 * * * *"),
+            vec!["2026-03-06 12:15:00", "2026-03-06 12:30:00", "2026-03-06 12:45:00"]
+        );
+        assert_eq!(upcoming("30 6 * * MON-FRI"), upcoming("0 30 6 * * MON-FRI"));
+        // whitespace around and between fields is tolerated
+        assert_eq!(upcoming("  0  2 * *   *  "), upcoming("0 0 2 * * *"));
+    }
+
+    #[test]
+    fn six_and_seven_field_expressions_are_unchanged() {
+        assert_eq!(parse_schedule("0 0 2 * * *").unwrap().to_string(), "0 0 2 * * *");
+        assert_eq!(
+            parse_schedule("0 0 2 * * * 2027").unwrap().to_string(),
+            "0 0 2 * * * 2027"
+        );
+        assert!(parse_schedule("@daily").is_ok());
+    }
+
+    #[test]
+    fn invalid_expressions_name_the_input() {
+        for bad in ["0 2 * *", "0 0 2 * * * * *", "not a cron", "", "99 * * * *"] {
+            let err = parse_schedule(bad).unwrap_err().to_string();
+            assert!(err.contains("while parsing cron expression"), "{bad}: {err}");
         }
     }
 
