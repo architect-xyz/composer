@@ -215,10 +215,19 @@ fn parse_docker_time(s: &str) -> Option<DateTime<Utc>> {
     Some(dt)
 }
 
-/// Render a timestamp for the status table in local time, minute precision.
+/// Render a timestamp for the status table in host-local time, minute
+/// precision, with the numeric UTC offset so the reader can correlate it
+/// against UTC-stamped sources (container logs, `docker inspect`, CI).
 fn format_time(dt: Option<DateTime<Utc>>) -> String {
+    format_time_in(dt, &Local)
+}
+
+fn format_time_in<Tz: chrono::TimeZone>(dt: Option<DateTime<Utc>>, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
     match dt {
-        Some(dt) => dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
+        Some(dt) => dt.with_timezone(tz).format("%Y-%m-%d %H:%M %:z").to_string(),
         None => "?".to_string(),
     }
 }
@@ -600,6 +609,18 @@ mod tests {
         assert_eq!(parse_label_value(""), None);
         assert_eq!(parse_label_value("  "), None);
         assert_eq!(parse_label_value("<no value>"), None);
+    }
+
+    #[test]
+    fn format_time_shows_numeric_offset() {
+        use chrono::FixedOffset;
+        let dt = parse_docker_time("2026-08-21T20:58:12Z");
+        let chicago = FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(format_time_in(dt, &chicago), "2026-08-21 15:58 -05:00");
+        let kolkata = FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
+        assert_eq!(format_time_in(dt, &kolkata), "2026-08-22 02:28 +05:30");
+        assert_eq!(format_time_in(dt, &Utc), "2026-08-21 20:58 +00:00");
+        assert_eq!(format_time_in(None, &Utc), "?");
     }
 
     #[test]
