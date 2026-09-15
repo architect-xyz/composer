@@ -59,23 +59,87 @@ static CRONTAB_DAY_OF_WEEK: LazyLock<Regex> = LazyLock::new(|| {
 /// Rewrite a strict 5-field crontab expression as the 6-field Quartz form
 /// the `cron` crate parses, by prepending a `0` seconds field.
 ///
-/// Why this is unambiguous: the crate has no mandatory separator between
-/// fields and tolerates whitespace inside ranges and lists, so a raw
-/// whitespace-token count is *not* its field count (`0 0 2 ** *` is a valid
-/// 6-field expression to it).  A field matching [`CRONTAB_FIELD`] however
-/// contains no whitespace and no character at which the crate could start
-/// a new field (interior boundaries are `,`, `-`, `/`, or mid-number and
-/// mid-name, and its number and name parsers are greedy), and it never ends
-/// in `,`, `-` or `/`, so it cannot join the next token either.  Each strict
-/// token is therefore exactly one crate field; five of them can never be
-/// the six the crate needs, so no expression this function accepts was
-/// previously valid, and prepending `0` yields exactly the six fields
-/// positionally.  `proptest` below checks both halves against the crate.
+/// # Correctness
 ///
-/// Two crontab semantics have no equivalent in the crate and are refused
-/// rather than silently changed: numeric days of week (see
-/// [`CRONTAB_DAY_OF_WEEK`]), and restricting both day-of-month and
-/// day-of-week (crontab fires when *either* matches, the crate when both).
+/// **Claim.** No expression this function rewrites was accepted by the
+/// `cron` crate before, and the crate reads the rewritten expression as
+/// exactly the six fields `0 minute hour day-of-month month day-of-week`.
+///
+/// **Assumptions**, from the grammar in `cron` 0.12, `src/parsing.rs`:
+///
+/// - A1. A longhand schedule is six or seven consecutive fields followed
+///   by end of input. A shorthand schedule begins with `@`.
+/// - A2. A field is a comma-separated list of items, each optionally
+///   followed by `/step`, surrounded by optional whitespace. Nothing is
+///   required between two fields.
+/// - A3. An item is `*`, `?`, a number, a name, `number-number` or
+///   `name-name`. A field therefore begins with `*`, `?`, a digit or a
+///   letter, never with `,`, `-` or `/`. Numbers are parsed by `digit1`
+///   and names by `alpha1`, which consume every following digit or letter.
+/// - A4. Numbers and names may be surrounded by whitespace. A field can
+///   continue past whitespace only if the next non-whitespace character is
+///   `-`, `,` or `/`.
+/// - A5. Parsing is deterministic and does not backtrack: once a parser
+///   has matched, a later failure does not make it retry a shorter match.
+///
+/// **Definition.** A *strict token* is a string matching [`CRONTAB_FIELD`]:
+/// `item(,item)*(/N)?` with items `*`, `N`, `N-M`, `NAME` or `NAME-NAME`.
+/// It contains no whitespace, begins with `*`, a digit or a letter, and
+/// ends with `*`, a digit or a letter.
+///
+/// **Lemma 1 (no split).** The crate finds at most one field in a strict
+/// token.
+///
+/// *Proof.* A second field would begin at an interior position. Every
+/// interior position is at `,`, `-` or `/`, or inside a run of digits or
+/// letters. No field begins with `,`, `-` or `/` (A3). A run of digits or
+/// letters is consumed whole by the parser that started it (A3, A5), so no
+/// field begins inside it. ∎
+///
+/// **Lemma 2 (no merge).** A field that begins in a strict token ends at
+/// or before the end of that token.
+///
+/// *Proof.* A strict token contains no whitespace, so the field can pass
+/// the token's end only by continuing across the whitespace that follows
+/// it. By A4 that requires the next non-whitespace character to be `-`,
+/// `,` or `/`. The next token begins with `*`, a digit or a letter, or the
+/// input ends. Neither continues the field. ∎
+///
+/// **Lemma 3 (exactly one).** The crate reads a strict token as exactly one
+/// field, or rejects the expression.
+///
+/// *Proof.* The token begins with `*`, a digit or a letter, so a field
+/// begins at its start (A3). By Lemma 1 no second field begins inside it,
+/// and by Lemma 2 the field ends with the token. The field parser either
+/// accepts the token or fails, and a failed field rejects the whole
+/// expression (A1). ∎
+///
+/// **Theorem.** Let `E = t1 t2 t3 t4 t5` with each `ti` a strict token.
+///
+/// - (i) The crate rejects `E`.
+/// - (ii) The crate reads `0 E` as the six fields `0 t1 t2 t3 t4 t5` in
+///   that order, or rejects it.
+///
+/// *Proof of (i).* `E` does not begin with `@`, so it is not a shorthand
+/// (A1). By Lemma 1 the crate finds at most five fields in `E`. A longhand
+/// schedule needs six (A1). ∎
+///
+/// *Proof of (ii).* `0` is a strict token, so `0 E` is six strict tokens
+/// separated by whitespace. By Lemma 3 each is exactly one field, and
+/// fields are read in input order (A1). ∎
+///
+/// By (i) this function never rewrites an expression that was already
+/// valid. By (ii) the rewrite adds a seconds field and changes nothing
+/// else. QED.
+///
+/// The assumptions describe a third-party grammar and can change with a
+/// crate upgrade. The `crontab_properties` test checks (i) and (ii) against
+/// the crate on every `cargo test`.
+///
+/// Two crontab meanings have no Quartz equivalent and are rejected instead
+/// of rewritten: numeric days of week ([`CRONTAB_DAY_OF_WEEK`]), and
+/// day-of-month and day-of-week both set (crontab runs when either
+/// matches; the crate runs only when both match).
 fn crontab_to_quartz(fields: &[&str; 5]) -> Result<String> {
     const NAMES: [&str; 5] = ["minute", "hour", "day-of-month", "month", "day-of-week"];
     for (name, field) in NAMES.iter().zip(fields).take(4) {
