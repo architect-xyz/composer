@@ -25,8 +25,8 @@ mod system_monitor;
 ///
 /// Add the `co.architect.composer.run` or `co.architect.composer.restart`
 /// labels to your services with a cron expression to schedule runs or
-/// restarts.  Both the Quartz form (6 fields, seconds first) and the classic
-/// 5-field crontab form (minutes first, fires at second 0) are accepted.
+/// restarts.  Accepts Quartz (6 fields, seconds first) and a subset of 5-field
+/// crontab (minutes first, second 0); see README for supported syntax.
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
