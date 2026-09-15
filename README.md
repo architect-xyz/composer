@@ -271,6 +271,13 @@ Exported metrics: `memory.used_pct`, `memory.used_bytes`, `memory.total_bytes`,
 `swap.used_pct`, `swap.used_bytes`, `swap.total_bytes`, `disk.used_pct`,
 `disk.used_bytes`, `disk.total_bytes`.
 
+## Logging
+
+Composer logs to stderr at `info` level by default, which covers scheduler
+activity (`next run for backup in 2h`, `running backup...`). Set `RUST_LOG`
+to change it, e.g. `RUST_LOG=composer=debug` to also see job output and the
+resolved compose config, or `RUST_LOG=warn` to quiet it down.
+
 ## CLI reference
 
 ```

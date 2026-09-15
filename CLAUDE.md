@@ -72,7 +72,7 @@ cargo run -- -f /path/to/compose.yml --run-logs ./logs
 ## Configuration
 
 ### Environment Variables
-- `RUST_LOG`: Set log level (e.g., `composer=debug`)
+- `RUST_LOG`: Set log level (e.g., `composer=debug`); defaults to `info` when unset
 - `COMPOSE_PROJECT_NAME`: Override compose project name
 - `COMPOSE_PROJECT_DIRECTORY`: Set working directory for compose commands
 - `COMPOSE_RUN_LOGS`: Directory for job output logs
