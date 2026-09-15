@@ -65,9 +65,18 @@ fi
 
 $SUDO mkdir -p "$INSTALL_DIR"
 
+# Download to a temp file beside the target and rename it into place.  Never
+# overwrite an existing binary in place: on macOS that invalidates the
+# kernel's code-signing cache for the inode and every later exec of the path
+# is killed (SIGKILL).  The rename also guards against a torn binary if the
+# download fails part way.
+TMP="$($SUDO mktemp "${INSTALL_DIR}/.composer.XXXXXX")"
+trap '$SUDO rm -f "$TMP"' EXIT
+
 echo "Downloading ${BINARY} (${VERSION})..."
-$SUDO curl -fsSL "$URL" -o "${INSTALL_DIR}/composer"
-$SUDO chmod +x "${INSTALL_DIR}/composer"
+$SUDO curl -fsSL "$URL" -o "$TMP"
+$SUDO chmod 755 "$TMP"
+$SUDO mv -f "$TMP" "${INSTALL_DIR}/composer"
 
 echo "Installed composer to ${INSTALL_DIR}/composer"
 "${INSTALL_DIR}/composer" --version

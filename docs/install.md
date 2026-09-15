@@ -220,14 +220,34 @@ Use the built-in update command:
 composer update
 ```
 
-Or replace the binary manually and restart the service:
+Or re-run the install script, which replaces the binary atomically:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/architect-xyz/composer/main/install.sh | sh
+composer restart   # or: sudo systemctl restart composer
+```
+
+If you replace the binary by hand, download to a temporary file and `mv` it
+over the old one rather than writing to the existing path. On macOS,
+overwriting a previously executed binary in place invalidates the kernel's
+code-signing cache and every later launch of it is killed (`zsh: killed
+composer`); a rename gives the path a fresh inode and avoids this:
 
 ```bash
 # Download new version (adjust path to match your install location)
-curl -fsSL https://github.com/afintech/composer/releases/latest/download/composer-linux-amd64 \
-  -o ~/.local/bin/composer
-chmod +x ~/.local/bin/composer
+curl -fsSL https://github.com/architect-xyz/composer/releases/latest/download/composer-linux-amd64 \
+  -o ~/.local/bin/composer.new
+chmod +x ~/.local/bin/composer.new
+mv -f ~/.local/bin/composer.new ~/.local/bin/composer
 
 # Restart
 composer restart   # or: sudo systemctl restart composer
 ```
+
+If you hit the kill after an in-place overwrite, `rm` the binary and
+reinstall.
+
+> **Note:** `composer update` on versions up to v0.10.12 fetches release
+> assets under their old `composer-macos-*` names. Releases publish those
+> names as aliases of `composer-darwin-*`, so the built-in update keeps
+> working from old versions.
