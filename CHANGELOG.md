@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.15](https://github.com/architect-xyz/composer/compare/v0.10.14...v0.10.15) (2026-09-15)
+
+
+### Features
+
+* log a startup banner before touching the filesystem ([#63](https://github.com/architect-xyz/composer/issues/63)) ([72e8e21](https://github.com/architect-xyz/composer/commit/72e8e2163be700c13fd0857ab085152701ae999a))
+* **status:** show the literal image tag when it isn't a version ([#68](https://github.com/architect-xyz/composer/issues/68)) ([8586d9a](https://github.com/architect-xyz/composer/commit/8586d9a37bbad18cc12ec742ac3e9441bc33725c))
+* **status:** show the UTC offset on Started timestamps ([#66](https://github.com/architect-xyz/composer/issues/66)) ([0817390](https://github.com/architect-xyz/composer/commit/081739051262172ba8c39a7be91ba199aca1f5e2))
+
+
+### Bug Fixes
+
+* **install:** replace the binary atomically instead of overwriting in place ([#70](https://github.com/architect-xyz/composer/issues/70)) ([68d6964](https://github.com/architect-xyz/composer/commit/68d6964031b3fa8e010014734db079f49a510ea8))
+* log at info by default when RUST_LOG is unset ([#65](https://github.com/architect-xyz/composer/issues/65)) ([23fe8db](https://github.com/architect-xyz/composer/commit/23fe8db5b2d2f8c96051d6f14cedf5fa8867ded7))
+* name the missing binary and PATH when docker cannot be spawned ([#64](https://github.com/architect-xyz/composer/issues/64)) ([821d182](https://github.com/architect-xyz/composer/commit/821d18222a38b1f465620ec2275998ba86ddfe22))
+* **status:** treat docker's "&lt;no value&gt;" as a missing version label ([#61](https://github.com/architect-xyz/composer/issues/61)) ([c541cf8](https://github.com/architect-xyz/composer/commit/c541cf8006cb0fd97b90ca63b5d237fe956eeaba))
+
 ## [0.10.14](https://github.com/architect-xyz/composer/compare/v0.10.13...v0.10.14) (2026-08-22)
 
 
