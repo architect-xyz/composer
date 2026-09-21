@@ -220,11 +220,7 @@ restarted each service in `last-runs.json` under its state directory
 or `~/.local/state/composer` elsewhere; override with `COMPOSER_STATE_DIR`).
 `composer status` reads the same file, keyed by the compose file's canonical
 path, so run it on the same host and against the same compose file as the
-scheduler. If `COMPOSE_PROJECT_DIRECTORY` is set, the key is that directory
-plus the compose file's name instead, so that a scheduler running in a
-container agrees with `composer status` on the host; see
-[docs/docker.md](docs/docker.md#last-run-records) for the volume mount that
-setup needs.
+scheduler.
 
 Every blank in the table is one of three labeled sentinels:
 

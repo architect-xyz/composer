@@ -40,7 +40,6 @@ services:
       - RUST_LOG=composer=debug
       - COMPOSE_PROJECT_DIRECTORY=${PWD}
       - COMPOSE_RUN_LOGS=/var/log/composer
-      - COMPOSER_STATE_DIR=/var/lib/composer
       - HOST=my-host
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
       - SLACK_WEBHOOK_ON_ERROR_URL=${SLACK_WEBHOOK_ON_ERROR_URL}
@@ -52,8 +51,6 @@ services:
       - ./.env:/.env:ro
       # mount in logs directory for run logs
       - ./var/logs:/var/log/composer:rw
-      # mount in state directory so last-run records survive a recreate
-      - ./var/state:/var/lib/composer:rw
 
   composer_as_host_system_monitor:
     image: afintech/composer:latest
@@ -61,7 +58,6 @@ services:
       - RUST_LOG=composer=trace
       - COMPOSE_PROJECT_DIRECTORY=${PWD}
       - COMPOSE_RUN_LOGS=/var/log/composer
-      - COMPOSER_STATE_DIR=/var/lib/composer
       - HOST=my-host
       - SYSTEM_MONITOR=true
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
@@ -75,7 +71,6 @@ services:
       - ./compose.yml:/compose.yml:ro
       - ./.env:/.env:ro
       - ./var/logs:/var/log/composer:rw
-      - ./var/state:/var/lib/composer:rw
 
   # Debug endpoint for test_metrics.rs
   otel-collector:
