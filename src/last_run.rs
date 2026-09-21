@@ -40,13 +40,27 @@ pub enum RunHistory {
     /// No record file for this compose project: no scheduler has registered
     /// it on this host, so nothing can be said either way.
     Unknown,
-    /// The project is registered but composer has never run this service.
-    Never,
+    /// The project is registered but composer has never run this service,
+    /// as far as the record goes back: since the given time, if known.
+    Never(Option<DateTime<Utc>>),
     Last(LastRun),
 }
 
-/// compose file path -> service -> last run
-type Records = BTreeMap<String, BTreeMap<String, LastRun>>;
+/// What is recorded about one compose project.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Project {
+    /// When a scheduler first registered the project in this record.  The
+    /// record says nothing about earlier runs (it may have been lost, e.g.
+    /// with a recreated container), so `never` is only known since then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<DateTime<Utc>>,
+    /// service -> last run
+    #[serde(default)]
+    pub services: BTreeMap<String, LastRun>,
+}
+
+/// compose file path -> project
+type Records = BTreeMap<String, Project>;
 
 /// Directory holding composer's own state.  `COMPOSER_STATE_DIR` wins;
 /// otherwise the platform convention (`~/Library/Application Support` on
@@ -102,7 +116,7 @@ fn write_records(path: &Path, records: &Records) -> Result<()> {
 /// Read-modify-write the record for one compose project.
 fn update<F>(context: &ComposeContext, f: F)
 where
-    F: FnOnce(&mut BTreeMap<String, LastRun>),
+    F: FnOnce(&mut Project),
 {
     let Some(path) = records_path() else {
         debug!("no state directory (HOME unset); not recording last run");
@@ -120,8 +134,10 @@ where
 
 /// Register a compose project so its services report `never` rather than
 /// `unknown` until they first run.  Called when the scheduler starts.
-pub fn register_project(context: &ComposeContext) {
-    update(context, |_| {});
+pub fn register_project(context: &ComposeContext, at: DateTime<Utc>) {
+    update(context, |project| {
+        project.registered_at.get_or_insert(at);
+    });
 }
 
 pub fn record_started(
@@ -131,7 +147,7 @@ pub fn record_started(
     at: DateTime<Utc>,
 ) {
     update(context, |project| {
-        project.insert(
+        project.services.insert(
             service.to_string(),
             LastRun {
                 action: action.to_string(),
@@ -150,7 +166,7 @@ pub fn record_finished(
     success: bool,
 ) {
     update(context, |project| {
-        if let Some(run) = project.get_mut(service) {
+        if let Some(run) = project.services.get_mut(service) {
             run.finished_at = Some(at);
             run.success = Some(success);
         }
@@ -159,7 +175,7 @@ pub fn record_finished(
 
 /// Run history for every service in this compose project, or None if the
 /// project has never been registered on this host.
-pub fn load(context: &ComposeContext) -> Option<BTreeMap<String, LastRun>> {
+pub fn load(context: &ComposeContext) -> Option<Project> {
     let path = records_path()?;
     let records = match read_records(&path) {
         Ok(records) => records,
@@ -172,12 +188,12 @@ pub fn load(context: &ComposeContext) -> Option<BTreeMap<String, LastRun>> {
 }
 
 /// Look up one service's history in the result of [`load`].
-pub fn history(records: Option<&BTreeMap<String, LastRun>>, service: &str) -> RunHistory {
-    match records {
+pub fn history(project: Option<&Project>, service: &str) -> RunHistory {
+    match project {
         None => RunHistory::Unknown,
-        Some(records) => match records.get(service) {
+        Some(project) => match project.services.get(service) {
             Some(run) => RunHistory::Last(run.clone()),
-            None => RunHistory::Never,
+            None => RunHistory::Never(project.registered_at),
         },
     }
 }
@@ -205,7 +221,8 @@ mod tests {
         let path = temp_records_path("roundtrip");
         let mut records = Records::new();
         let project = records.entry("/srv/app/compose.yml".to_string()).or_default();
-        project.insert(
+        project.registered_at = Some(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap());
+        project.services.insert(
             "backup".to_string(),
             LastRun {
                 action: "run".to_string(),
@@ -228,17 +245,18 @@ mod tests {
     #[test]
     fn history_distinguishes_unknown_never_and_last() {
         assert_eq!(history(None, "backup"), RunHistory::Unknown);
-        let mut project = BTreeMap::new();
-        assert_eq!(history(Some(&project), "backup"), RunHistory::Never);
+        let registered_at = Some(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap());
+        let mut project = Project { registered_at, ..Default::default() };
+        assert_eq!(history(Some(&project), "backup"), RunHistory::Never(registered_at));
         let run = LastRun {
             action: "run".to_string(),
             started_at: Utc.with_ymd_and_hms(2026, 8, 26, 10, 15, 0).unwrap(),
             finished_at: Some(Utc.with_ymd_and_hms(2026, 8, 26, 10, 16, 0).unwrap()),
             success: Some(true),
         };
-        project.insert("backup".to_string(), run.clone());
+        project.services.insert("backup".to_string(), run.clone());
         assert_eq!(history(Some(&project), "backup"), RunHistory::Last(run));
-        assert_eq!(history(Some(&project), "other"), RunHistory::Never);
+        assert_eq!(history(Some(&project), "other"), RunHistory::Never(registered_at));
     }
 
     #[test]

@@ -203,14 +203,14 @@ service with its profile, type (`job` if it has a run schedule, `service`
 otherwise), container state, version, and when it was last started:
 
 ```
-┌─────────┬────────────┬─────────┬─────────┬─────────┬───────────────────────────────────┐
-│ Profile │ Name       │ Type    │ Status  │ Version │ Started                           │
-├─────────┼────────────┼─────────┼─────────┼─────────┼───────────────────────────────────┤
-│         │ backup     │ job     │ JOB     │ 1.4.0   │ 2026-08-26 10:15 -05:00 (23m ago) │
-│         │ report     │ job     │ JOB     │ -       │ never                             │
-│         │ api        │ service │ UP (4d) │ 2.1.0   │ 2026-08-21 15:58 -05:00           │
-│ build   │ worker     │ service │ DOWN    │ 0.3.1   │ -                                 │
-└─────────┴────────────┴─────────┴─────────┴─────────┴───────────────────────────────────┘
+┌─────────┬────────────┬─────────┬─────────┬─────────┬────────────────────────────────────────────┐
+│ Profile │ Name       │ Type    │ Status  │ Version │ Started                                    │
+├─────────┼────────────┼─────────┼─────────┼─────────┼────────────────────────────────────────────┤
+│         │ backup     │ job     │ JOB     │ 1.4.0   │ 2026-08-26 10:15 -05:00 (23m ago)          │
+│         │ report     │ job     │ JOB     │ -       │ afaict never since 2026-08-01 09:00 -05:00 │
+│         │ api        │ service │ UP (4d) │ 2.1.0   │ 2026-08-21 15:58 -05:00                    │
+│ build   │ worker     │ service │ DOWN    │ 0.3.1   │ -                                          │
+└─────────┴────────────┴─────────┴─────────┴─────────┴────────────────────────────────────────────┘
 ```
 
 Scheduled runs use `docker compose run --rm`, so a finished job leaves no
@@ -225,7 +225,10 @@ scheduler.
 Every blank in the table is one of three labeled sentinels:
 
 - `-`: nothing to inspect (no container, and nothing in the compose file to go on)
-- `never`: the scheduler has registered this compose file but has never run the service
+- `never`: the scheduler has registered this compose file but has never run the service.
+  Shown as `afaict never since <time>`, the time being when the record began:
+  composer can't vouch for anything before that (the record may have been
+  lost, e.g. with a recreated scheduler container)
 - `unknown`: composer can't tell, e.g. no scheduler has run against this compose file on this host
 
 ## Shell aliases

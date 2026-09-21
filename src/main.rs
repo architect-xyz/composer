@@ -384,7 +384,7 @@ async fn main() -> Result<()> {
         info!("compose config reloaded");
         info!("starting scheduler...");
         // so `composer status` can report `never` for jobs that haven't fired
-        last_run::register_project(&context);
+        last_run::register_project(&context, Utc::now());
         let mut tasks = run_tasks(
             &context,
             &compose,
