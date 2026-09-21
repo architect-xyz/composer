@@ -3,9 +3,10 @@
 //! Scheduled runs use `docker compose run --rm`, so once a job finishes no
 //! container remains for `status` to inspect.  The scheduler therefore keeps
 //! its own record, in a small JSON file under the platform state directory,
-//! keyed by the canonical compose file path and service name.  Both the
-//! scheduler (which writes it) and `composer status` (which reads it) resolve
-//! the same path, so the CLI can tell "never ran" from "no idea".
+//! keyed by the compose file's path on the host (see [`project_key`]) and
+//! service name.  Both the scheduler (which writes it) and `composer status`
+//! (which reads it) resolve the same key, so the CLI can tell "never ran"
+//! from "no idea".
 
 use crate::compose::{ComposeAction, ComposeContext};
 use anyhow::{Context, Result};
@@ -70,13 +71,25 @@ fn records_path() -> Option<PathBuf> {
     state_dir().map(|d| d.join(FILE_NAME))
 }
 
-/// The key a compose file is recorded under: its canonical path, so the
-/// scheduler (which canonicalizes) and `status` (which may not) agree.
+/// The key a compose project is recorded under: the path of its compose
+/// file *on the host*.
+///
+/// Normally that is the canonical compose file path, so the scheduler (which
+/// canonicalizes) and `status` (which may not) agree.  When a project
+/// directory is set (`COMPOSE_PROJECT_DIRECTORY`), the key is that directory
+/// plus the compose file's name instead.  A scheduler running in a container
+/// sees the compose file at a mount path like `/compose.yml`, but is told the
+/// host's project directory, so this gives it the same key as a
+/// `composer status` run on the host against the real file.
 fn project_key(context: &ComposeContext) -> String {
-    fs::canonicalize(&context.compose_file)
-        .unwrap_or_else(|_| context.compose_file.clone())
-        .display()
-        .to_string()
+    let canonical = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let project_file = context
+        .project_directory
+        .as_deref()
+        .filter(|d| !d.is_empty())
+        .zip(context.compose_file.file_name())
+        .map(|(dir, name)| canonical(Path::new(dir)).join(name));
+    project_file.unwrap_or_else(|| canonical(&context.compose_file)).display().to_string()
 }
 
 fn read_records(path: &Path) -> Result<Records> {
@@ -239,6 +252,40 @@ mod tests {
         project.insert("backup".to_string(), run.clone());
         assert_eq!(history(Some(&project), "backup"), RunHistory::Last(run));
         assert_eq!(history(Some(&project), "other"), RunHistory::Never);
+    }
+
+    fn context(compose_file: &str, project_directory: Option<&str>) -> ComposeContext {
+        ComposeContext {
+            compose_file: PathBuf::from(compose_file),
+            env_file: None,
+            project_directory: project_directory.map(str::to_string),
+            hostname: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn project_key_uses_host_project_directory() {
+        // no project directory: the compose file's own path
+        assert_eq!(
+            project_key(&context("/nonexistent/app/compose.yml", None)),
+            "/nonexistent/app/compose.yml"
+        );
+        assert_eq!(
+            project_key(&context("/nonexistent/app/compose.yml", Some(""))),
+            "/nonexistent/app/compose.yml"
+        );
+        // in a container the file is at a mount path, but the project
+        // directory names where it lives on the host...
+        let in_container = context("/compose.yml", Some("/nonexistent/app"));
+        assert_eq!(project_key(&in_container), "/nonexistent/app/compose.yml");
+        // ...which is the key `composer status` on the host arrives at
+        let on_host = context("/nonexistent/app/compose.yml", None);
+        assert_eq!(project_key(&in_container), project_key(&on_host));
+        // a trailing slash on the directory doesn't change the key
+        assert_eq!(
+            project_key(&context("/compose.yml", Some("/nonexistent/app/"))),
+            "/nonexistent/app/compose.yml"
+        );
     }
 
     #[test]
