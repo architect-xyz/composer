@@ -537,6 +537,17 @@ fn run_tasks(
                     .with_context(|| {
                         format!("while parsing labels for service {name}")
                     })?;
+                // cosmetic (affects `status` colouring only), so warn rather
+                // than refuse to start over a typo
+                if let Some(v) = labels.get(status::EXPECT_KEY) {
+                    if !status::EXPECT_VALUES.contains(&v.trim()) {
+                        warn!(
+                            "service {name}: ignoring {} value {v:?}, expected one of {}",
+                            status::EXPECT_KEY,
+                            status::EXPECT_VALUES.join(", ")
+                        );
+                    }
+                }
 
                 for (key, value) in labels {
                     let (action, schedule_name) = match get_schedule_action(key) {

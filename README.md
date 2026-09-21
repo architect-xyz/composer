@@ -189,6 +189,26 @@ labels:
   - "co.architect.composer.run=manual"
 ```
 
+### Services that are expected to be down
+
+`composer status` shows every non-running service as a red `DOWN`. Some
+services are meant to stay down, e.g. a template that exists only for
+manual `docker compose run --rm <svc> ...` invocations. Declare that with the
+`expect` label and `status` renders its `DOWN` dimmed instead of red, so
+real outages stand out:
+
+```yaml
+services:
+  migrate:
+    image: my-app:latest
+    labels:
+      - "co.architect.composer.expect=manual"   # up | manual
+```
+
+Services behind a `profiles:` entry get the dimmed treatment by default,
+since compose won't start them in the default profile; set
+`co.architect.composer.expect=up` to flag one as required anyway.
+
 ## Compose file auto-detection
 
 When run without `-f`, composer searches the current directory for:
