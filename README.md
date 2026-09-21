@@ -227,8 +227,7 @@ Every blank in the table is one of three labeled sentinels:
 - `-`: nothing to inspect (no container, and nothing in the compose file to go on)
 - `not since <time>`: the scheduler has not run the service since its record
   for this compose file began. Composer can't vouch for anything before that
-  (the record may have been lost, e.g. with a recreated scheduler container).
-  A bare `never` means the record doesn't say when it began
+  (the record may have been lost, e.g. with a recreated scheduler container)
 - `unknown`: composer can't tell, e.g. no scheduler has run against this compose file on this host
 
 ## Shell aliases

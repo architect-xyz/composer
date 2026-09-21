@@ -40,20 +40,19 @@ pub enum RunHistory {
     /// No record file for this compose project: no scheduler has registered
     /// it on this host, so nothing can be said either way.
     Unknown,
-    /// The project is registered but composer has never run this service,
-    /// as far as the record goes back: since the given time, if known.
-    Never(Option<DateTime<Utc>>),
+    /// Composer has not run this service for as far back as the project's
+    /// record goes, which is the given time.
+    NotSince(DateTime<Utc>),
     Last(LastRun),
 }
 
 /// What is recorded about one compose project.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Project {
-    /// When a scheduler first registered the project in this record.  The
-    /// record says nothing about earlier runs (it may have been lost, e.g.
-    /// with a recreated container), so `never` is only known since then.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registered_at: Option<DateTime<Utc>>,
+    /// When the project first entered this record.  The record says nothing
+    /// about earlier runs (it may have been lost, e.g. with a recreated
+    /// container), so "never ran" is only known since then.
+    pub registered_at: DateTime<Utc>,
     /// service -> last run
     #[serde(default)]
     pub services: BTreeMap<String, LastRun>,
@@ -114,7 +113,7 @@ fn write_records(path: &Path, records: &Records) -> Result<()> {
 }
 
 /// Read-modify-write the record for one compose project.
-fn update<F>(context: &ComposeContext, f: F)
+fn update<F>(context: &ComposeContext, at: DateTime<Utc>, f: F)
 where
     F: FnOnce(&mut Project),
 {
@@ -124,7 +123,10 @@ where
     };
     let result = (|| -> Result<()> {
         let mut records = read_records(&path)?;
-        f(records.entry(project_key(context)).or_default());
+        let project = records
+            .entry(project_key(context))
+            .or_insert_with(|| Project { registered_at: at, services: BTreeMap::new() });
+        f(project);
         write_records(&path, &records)
     })();
     if let Err(e) = result {
@@ -132,12 +134,11 @@ where
     }
 }
 
-/// Register a compose project so its services report `never` rather than
-/// `unknown` until they first run.  Called when the scheduler starts.
+/// Register a compose project so its services report `not since <time>`
+/// rather than `unknown` until they first run.  Called when the scheduler
+/// starts; a project already in the record keeps its original time.
 pub fn register_project(context: &ComposeContext, at: DateTime<Utc>) {
-    update(context, |project| {
-        project.registered_at.get_or_insert(at);
-    });
+    update(context, at, |_| {});
 }
 
 pub fn record_started(
@@ -146,7 +147,7 @@ pub fn record_started(
     action: ComposeAction,
     at: DateTime<Utc>,
 ) {
-    update(context, |project| {
+    update(context, at, |project| {
         project.services.insert(
             service.to_string(),
             LastRun {
@@ -165,7 +166,7 @@ pub fn record_finished(
     at: DateTime<Utc>,
     success: bool,
 ) {
-    update(context, |project| {
+    update(context, at, |project| {
         if let Some(run) = project.services.get_mut(service) {
             run.finished_at = Some(at);
             run.success = Some(success);
@@ -193,7 +194,7 @@ pub fn history(project: Option<&Project>, service: &str) -> RunHistory {
         None => RunHistory::Unknown,
         Some(project) => match project.services.get(service) {
             Some(run) => RunHistory::Last(run.clone()),
-            None => RunHistory::Never(project.registered_at),
+            None => RunHistory::NotSince(project.registered_at),
         },
     }
 }
@@ -220,8 +221,13 @@ mod tests {
     fn round_trips_records() {
         let path = temp_records_path("roundtrip");
         let mut records = Records::new();
-        let project = records.entry("/srv/app/compose.yml".to_string()).or_default();
-        project.registered_at = Some(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap());
+        let project =
+            records.entry("/srv/app/compose.yml".to_string()).or_insert_with(|| {
+                Project {
+                    registered_at: Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap(),
+                    services: BTreeMap::new(),
+                }
+            });
         project.services.insert(
             "backup".to_string(),
             LastRun {
@@ -243,11 +249,14 @@ mod tests {
     }
 
     #[test]
-    fn history_distinguishes_unknown_never_and_last() {
+    fn history_distinguishes_unknown_not_since_and_last() {
         assert_eq!(history(None, "backup"), RunHistory::Unknown);
-        let registered_at = Some(Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap());
-        let mut project = Project { registered_at, ..Default::default() };
-        assert_eq!(history(Some(&project), "backup"), RunHistory::Never(registered_at));
+        let registered_at = Utc.with_ymd_and_hms(2026, 8, 1, 0, 0, 0).unwrap();
+        let mut project = Project { registered_at, services: BTreeMap::new() };
+        assert_eq!(
+            history(Some(&project), "backup"),
+            RunHistory::NotSince(registered_at)
+        );
         let run = LastRun {
             action: "run".to_string(),
             started_at: Utc.with_ymd_and_hms(2026, 8, 26, 10, 15, 0).unwrap(),
@@ -256,7 +265,7 @@ mod tests {
         };
         project.services.insert("backup".to_string(), run.clone());
         assert_eq!(history(Some(&project), "backup"), RunHistory::Last(run));
-        assert_eq!(history(Some(&project), "other"), RunHistory::Never(registered_at));
+        assert_eq!(history(Some(&project), "other"), RunHistory::NotSince(registered_at));
     }
 
     #[test]
