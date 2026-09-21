@@ -262,7 +262,12 @@ fn short_duration(d: chrono::Duration) -> String {
 // apart without guessing:
 /// nothing to inspect (no container, and nothing in the compose file to go on)
 const NOT_APPLICABLE: &str = "-";
-// (a job composer has never run reads `not since <time>`, see [`not_since_cell`])
+/// composer has never run this job, as far back as its record goes.  The
+/// `(*)` flags that caveat: the record can be lost (e.g. with a recreated
+/// scheduler container), so a bare "never" would claim too much.  When the
+/// record began is known ([`RunHistory::NotSince`]) but not shown, to keep
+/// the column narrow.
+const NEVER: &str = "never (*)";
 /// composer genuinely cannot tell
 const UNKNOWN: &str = "unknown";
 
@@ -298,19 +303,9 @@ fn started_cell(
         // a plain service is started by compose, not by composer, so the
         // absence of a composer record says nothing about it
         _ if info.service_type != "job" => NOT_APPLICABLE.to_string(),
-        RunHistory::NotSince(since) => not_since_cell(*since, &Local),
+        RunHistory::NotSince(_) => NEVER.to_string(),
         RunHistory::Unknown => UNKNOWN.to_string(),
     }
-}
-
-/// A job composer has never run: `not since <time>`, the time being how far
-/// back composer's record goes.  The record can be lost (e.g. with a
-/// recreated scheduler container), so a bare "never" would claim too much.
-fn not_since_cell<Tz: chrono::TimeZone>(since: DateTime<Utc>, tz: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    format!("not since {}", format_time_in(Some(since), tz))
 }
 
 /// Condense docker's "Up 3 hours" status text into a short form like "3h".
@@ -755,15 +750,16 @@ mod tests {
     }
 
     #[test]
-    fn not_since_cell_says_how_far_back_the_record_goes() {
+    fn unfired_job_reads_never_with_caveat() {
         let since = parse_docker_time("2026-08-21T20:58:12Z").unwrap();
-        assert_eq!(not_since_cell(since, &Utc), "not since 2026-08-21 20:58 +00:00");
-        let cell = started_cell(
-            &service("job", None, RunHistory::NotSince(since)),
-            None,
-            Utc::now(),
+        assert_eq!(
+            started_cell(
+                &service("job", None, RunHistory::NotSince(since)),
+                None,
+                Utc::now()
+            ),
+            "never (*)"
         );
-        assert!(cell.starts_with("not since 2026-08-2"), "{cell}");
         // still not applicable to a plain service
         assert_eq!(
             started_cell(
@@ -788,7 +784,7 @@ mod tests {
             None,
             now,
         );
-        assert!(cell.starts_with("not since "), "{cell}");
+        assert_eq!(cell, "never (*)");
         let cell = started_cell(
             &service("job", None, RunHistory::Last(run_at(23 * 60 + 5, now))),
             None,
@@ -815,7 +811,7 @@ mod tests {
             Some(&started),
             now,
         );
-        assert!(!cell.contains("ago") && !cell.starts_with("not since"), "{cell}");
+        assert!(!cell.contains("ago") && !cell.starts_with("never"), "{cell}");
         let unstarted = ContainerStatus::default();
         assert_eq!(
             started_cell(

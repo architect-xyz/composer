@@ -134,8 +134,8 @@ where
     }
 }
 
-/// Register a compose project so its services report `not since <time>`
-/// rather than `unknown` until they first run.  Called when the scheduler
+/// Register a compose project so its services report `never (*)` rather
+/// than `unknown` until they first run.  Called when the scheduler
 /// starts; a project already in the record keeps its original time.
 pub fn register_project(context: &ComposeContext, at: DateTime<Utc>) {
     update(context, at, |_| {});

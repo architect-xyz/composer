@@ -57,9 +57,9 @@ The host-native binary avoids all of this.
 Use the `/status.txt` endpoint (the `status` alias does) rather than
 `composer status` on the host. Last-run records for jobs are a host-native
 feature; in Docker they are best-effort: they live inside the scheduler's
-container and reset when it is recreated, after which jobs show
-`not since <scheduler start>` until they next run. To keep them,
-set `COMPOSER_STATE_DIR` to a mounted directory.
+container and reset when it is recreated, after which jobs show `never (*)`
+until they next run. To keep them, set `COMPOSER_STATE_DIR` to a mounted
+directory.
 
 ### Host system monitoring from Docker
 

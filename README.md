@@ -207,7 +207,7 @@ otherwise), container state, version, and when it was last started:
 │ Profile │ Name       │ Type    │ Status  │ Version │ Started                           │
 ├─────────┼────────────┼─────────┼─────────┼─────────┼───────────────────────────────────┤
 │         │ backup     │ job     │ JOB     │ 1.4.0   │ 2026-08-26 10:15 -05:00 (23m ago) │
-│         │ report     │ job     │ JOB     │ -       │ not since 2026-08-01 09:00 -05:00 │
+│         │ report     │ job     │ JOB     │ -       │ never (*)                         │
 │         │ api        │ service │ UP (4d) │ 2.1.0   │ 2026-08-21 15:58 -05:00           │
 │ build   │ worker     │ service │ DOWN    │ 0.3.1   │ -                                 │
 └─────────┴────────────┴─────────┴─────────┴─────────┴───────────────────────────────────┘
@@ -225,9 +225,10 @@ scheduler.
 Every blank in the table is one of three labeled sentinels:
 
 - `-`: nothing to inspect (no container, and nothing in the compose file to go on)
-- `not since <time>`: the scheduler has not run the service since its record
-  for this compose file began. Composer can't vouch for anything before that
-  (the record may have been lost, e.g. with a recreated scheduler container)
+- `never (*)`: the scheduler has never run the service. (*) As far back as its
+  record for this compose file goes, that is: composer can't vouch for anything
+  earlier (the record may have been lost, e.g. with a recreated scheduler
+  container)
 - `unknown`: composer can't tell, e.g. no scheduler has run against this compose file on this host
 
 ## Shell aliases
