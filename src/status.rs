@@ -305,15 +305,16 @@ fn started_cell(
     }
 }
 
-/// `never`, qualified by how far back composer's record goes when that is
-/// known: the record can be lost (e.g. with a recreated scheduler
-/// container), so an unqualified `never` would claim too much.
+/// A job composer has never run: `not since <time>`, the time being how far
+/// back composer's record goes.  The record can be lost (e.g. with a
+/// recreated scheduler container), so an unqualified `never` would claim too
+/// much; it is used only when the record doesn't say when it began.
 fn never_cell_in<Tz: chrono::TimeZone>(since: Option<DateTime<Utc>>, tz: &Tz) -> String
 where
     Tz::Offset: std::fmt::Display,
 {
     match since {
-        Some(_) => format!("{NEVER} since {}", format_time_in(since, tz)),
+        Some(_) => format!("not since {}", format_time_in(since, tz)),
         None => NEVER.to_string(),
     }
 }
@@ -751,14 +752,14 @@ mod tests {
     #[test]
     fn never_cell_says_how_far_back_the_record_goes() {
         let since = parse_docker_time("2026-08-21T20:58:12Z");
-        assert_eq!(never_cell_in(since, &Utc), "never since 2026-08-21 20:58 +00:00");
+        assert_eq!(never_cell_in(since, &Utc), "not since 2026-08-21 20:58 +00:00");
         assert_eq!(never_cell_in(None, &Utc), "never");
         let cell = started_cell(
             &service("job", None, RunHistory::Never(since)),
             None,
             Utc::now(),
         );
-        assert!(cell.starts_with("never since 2026-08-2"), "{cell}");
+        assert!(cell.starts_with("not since 2026-08-2"), "{cell}");
         // still not applicable to a plain service
         assert_eq!(
             started_cell(
