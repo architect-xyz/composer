@@ -76,6 +76,7 @@ cargo run -- -f /path/to/compose.yml --run-logs ./logs
 - `COMPOSE_PROJECT_NAME`: Override compose project name
 - `COMPOSE_PROJECT_DIRECTORY`: Set working directory for compose commands
 - `COMPOSE_RUN_LOGS`: Directory for job output logs
+- `COMPOSER_STATE_DIR`: Directory for composer's own state (`last-runs.json`); defaults to the platform state directory
 - `HOST`: Hostname for Slack notifications
 - `SLACK_WEBHOOK_URL`: Slack webhook for all notifications
 - `SLACK_WEBHOOK_ON_ERROR_URL`: Slack webhook for error-only notifications

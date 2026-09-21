@@ -1,4 +1,7 @@
-use crate::compose::{compose_command, spawn_error, ComposeContext};
+use crate::{
+    compose::{compose_command, spawn_error, ComposeContext},
+    last_run::{self, RunHistory},
+};
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Local, Utc};
 use log::debug;
@@ -16,6 +19,8 @@ pub struct ServiceInfo {
     pub service_type: String, // "job" or "service"
     /// Image reference declared in the compose file, if any
     pub image: Option<String>,
+    /// When composer itself last ran or restarted this service
+    pub history: RunHistory,
 }
 
 #[derive(serde::Deserialize)]
@@ -50,6 +55,7 @@ pub async fn gather_status_data(
     compose: &crate::compose_types::Compose,
 ) -> Result<(Vec<ServiceInfo>, BTreeMap<String, ContainerStatus>)> {
     // Collect service information
+    let last_runs = last_run::load(context);
     let mut services_info: Vec<ServiceInfo> = Vec::new();
     for (name, service_opt) in &compose.services {
         if let Some(service) = service_opt {
@@ -83,6 +89,7 @@ pub async fn gather_status_data(
                 name: name.clone(),
                 service_type: service_type.to_string(),
                 image: service.image.clone(),
+                history: last_run::history(last_runs.as_ref(), name),
             });
         }
     }
@@ -236,7 +243,68 @@ where
 {
     match dt {
         Some(dt) => dt.with_timezone(tz).format("%Y-%m-%d %H:%M %:z").to_string(),
-        None => "?".to_string(),
+        None => UNKNOWN.to_string(),
+    }
+}
+
+/// Coarse "how long ago" hint: `45s`, `23m`, `5h`, `12d`.
+fn short_duration(d: chrono::Duration) -> String {
+    let secs = d.num_seconds().max(0);
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86400),
+    }
+}
+
+// Every "no value" in the table is one of these, so a reader can tell them
+// apart without guessing:
+/// nothing to inspect (no container, and nothing in the compose file to go on)
+const NOT_APPLICABLE: &str = "-";
+/// composer has never run this job, as far back as its record goes.  The
+/// `(*)` flags that caveat: the record can be lost (e.g. with a recreated
+/// scheduler container), so a bare "never" would claim too much.  When the
+/// record began is known ([`RunHistory::NotSince`]) but not shown, to keep
+/// the column narrow.
+const NEVER: &str = "never (*)";
+/// composer genuinely cannot tell
+const UNKNOWN: &str = "unknown";
+
+/// Version column: what the container runs, else what the compose file
+/// declares.  `unknown` only when there *is* a container and nothing could
+/// be determined; `-` when there's simply nothing to inspect.
+fn version_cell(info: &ServiceInfo, container: Option<&ContainerStatus>) -> String {
+    let image = container.map(|c| c.image.as_str()).or(info.image.as_deref());
+    match detect_version(image, container) {
+        Some(v) => v,
+        None if container.is_some() => UNKNOWN.to_string(),
+        None => NOT_APPLICABLE.to_string(),
+    }
+}
+
+/// Started column: the container's last start when there is one; otherwise
+/// composer's own record of when it last ran the service.  `--rm` jobs leave
+/// no container, so for them the record is the only source.
+fn started_cell(
+    info: &ServiceInfo,
+    container: Option<&ContainerStatus>,
+    now: DateTime<Utc>,
+) -> String {
+    if let Some(container) = container {
+        return format_time(container.started_at);
+    }
+    match &info.history {
+        RunHistory::Last(run) => format!(
+            "{} ({} ago)",
+            format_time(Some(run.started_at)),
+            short_duration(now - run.started_at)
+        ),
+        // a plain service is started by compose, not by composer, so the
+        // absence of a composer record says nothing about it
+        _ if info.service_type != "job" => NOT_APPLICABLE.to_string(),
+        RunHistory::NotSince(_) => NEVER.to_string(),
+        RunHistory::Unknown => UNKNOWN.to_string(),
     }
 }
 
@@ -395,6 +463,7 @@ pub fn format_status_table(
 
     table.set_titles(row!["Profile", "Name", "Type", "Status", "Version", "Started"]);
 
+    let now = Utc::now();
     for info in services_info {
         let container = status_map.get(&info.name);
         let raw_state = container.map(|c| c.state.as_str());
@@ -424,19 +493,13 @@ pub fn format_status_table(
             status_cell = status_cell.with_style(Attr::ForegroundColor(c));
         }
 
-        // Prefer what the container is actually running; fall back to what
-        // the compose file declares (e.g. for jobs, which leave no container)
-        let image = container.map(|c| c.image.as_str()).or(info.image.as_deref());
-        let version = detect_version(image, container).unwrap_or_else(|| "?".to_string());
-        let started_at = container.and_then(|c| c.started_at);
-
         table.add_row(Row::new(vec![
             Cell::new(&info.profile),
             Cell::new(&info.name),
             Cell::new(&info.service_type),
             status_cell,
-            Cell::new(&version),
-            Cell::new(&format_time(started_at)),
+            Cell::new(&version_cell(info, container)),
+            Cell::new(&started_cell(info, container, now)),
         ]));
     }
 
@@ -669,6 +732,157 @@ mod tests {
         assert_eq!(parse_label_value("<no value>"), None);
     }
 
+    fn service(
+        service_type: &str,
+        image: Option<&str>,
+        history: RunHistory,
+    ) -> ServiceInfo {
+        ServiceInfo {
+            profile: String::new(),
+            name: "svc".to_string(),
+            service_type: service_type.to_string(),
+            image: image.map(str::to_string),
+            history,
+        }
+    }
+
+    fn run_at(secs_ago: i64, now: DateTime<Utc>) -> crate::last_run::LastRun {
+        crate::last_run::LastRun {
+            action: "run".to_string(),
+            started_at: now - chrono::Duration::seconds(secs_ago),
+            finished_at: None,
+            success: None,
+        }
+    }
+
+    #[test]
+    fn version_cell_sentinels() {
+        // no container: derive from the compose file, else nothing to inspect
+        assert_eq!(
+            version_cell(
+                &service(
+                    "job",
+                    Some("app:1.2.3"),
+                    RunHistory::NotSince(DateTime::UNIX_EPOCH)
+                ),
+                None
+            ),
+            "1.2.3"
+        );
+        assert_eq!(
+            version_cell(
+                &service(
+                    "job",
+                    Some("app:latest"),
+                    RunHistory::NotSince(DateTime::UNIX_EPOCH)
+                ),
+                None
+            ),
+            "latest"
+        );
+        assert_eq!(
+            version_cell(
+                &service("job", Some("app"), RunHistory::NotSince(DateTime::UNIX_EPOCH)),
+                None
+            ),
+            "-"
+        );
+        assert_eq!(
+            version_cell(&service("service", None, RunHistory::Unknown), None),
+            "-"
+        );
+        // a container with nothing determinable is the one truly unknown case
+        let bare = ContainerStatus { image: "app".to_string(), ..Default::default() };
+        assert_eq!(
+            version_cell(&service("service", None, RunHistory::Unknown), Some(&bare)),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn unfired_job_reads_never_with_caveat() {
+        let since = parse_docker_time("2026-08-21T20:58:12Z").unwrap();
+        assert_eq!(
+            started_cell(
+                &service("job", None, RunHistory::NotSince(since)),
+                None,
+                Utc::now()
+            ),
+            "never (*)"
+        );
+        // still not applicable to a plain service
+        assert_eq!(
+            started_cell(
+                &service("service", None, RunHistory::NotSince(since)),
+                None,
+                Utc::now()
+            ),
+            "-"
+        );
+    }
+
+    #[test]
+    fn started_cell_sentinels() {
+        let now = Utc::now();
+        // jobs: composer's record decides
+        assert_eq!(
+            started_cell(&service("job", None, RunHistory::Unknown), None, now),
+            "unknown"
+        );
+        let cell = started_cell(
+            &service("job", None, RunHistory::NotSince(DateTime::UNIX_EPOCH)),
+            None,
+            now,
+        );
+        assert_eq!(cell, "never (*)");
+        let cell = started_cell(
+            &service("job", None, RunHistory::Last(run_at(23 * 60 + 5, now))),
+            None,
+            now,
+        );
+        assert!(cell.ends_with(" (23m ago)"), "{cell}");
+        // services: compose starts them, so no record means nothing to say
+        assert_eq!(
+            started_cell(
+                &service("service", None, RunHistory::NotSince(DateTime::UNIX_EPOCH)),
+                None,
+                now
+            ),
+            "-"
+        );
+        assert_eq!(
+            started_cell(&service("service", None, RunHistory::Unknown), None, now),
+            "-"
+        );
+        // a container's own start time always wins; a container without one is unknown
+        let started = ContainerStatus { started_at: Some(now), ..Default::default() };
+        let cell = started_cell(
+            &service("job", None, RunHistory::NotSince(DateTime::UNIX_EPOCH)),
+            Some(&started),
+            now,
+        );
+        assert!(!cell.contains("ago") && !cell.starts_with("never"), "{cell}");
+        let unstarted = ContainerStatus::default();
+        assert_eq!(
+            started_cell(
+                &service("service", None, RunHistory::Unknown),
+                Some(&unstarted),
+                now
+            ),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn short_duration_units() {
+        use chrono::Duration;
+        assert_eq!(short_duration(Duration::seconds(45)), "45s");
+        assert_eq!(short_duration(Duration::seconds(23 * 60 + 14)), "23m");
+        assert_eq!(short_duration(Duration::hours(5) + Duration::minutes(59)), "5h");
+        assert_eq!(short_duration(Duration::days(12)), "12d");
+        assert_eq!(short_duration(Duration::seconds(-5)), "0s");
+    }
+
     #[test]
     fn format_time_shows_numeric_offset() {
         use chrono::FixedOffset;
@@ -678,7 +892,7 @@ mod tests {
         let kolkata = FixedOffset::east_opt(5 * 3600 + 1800).unwrap();
         assert_eq!(format_time_in(dt, &kolkata), "2026-08-22 02:28 +05:30");
         assert_eq!(format_time_in(dt, &Utc), "2026-08-21 20:58 +00:00");
-        assert_eq!(format_time_in(None, &Utc), "?");
+        assert_eq!(format_time_in(None, &Utc), UNKNOWN);
     }
 
     #[test]

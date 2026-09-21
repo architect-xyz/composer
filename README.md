@@ -196,6 +196,41 @@ When run without `-f`, composer searches the current directory for:
 If multiple files are found, it prompts for selection. You can always
 specify a file explicitly with `-f path/to/compose.yml`.
 
+## Service status
+
+`composer status` (and the scheduler's `/status.txt` endpoint) lists every
+service with its profile, type (`job` if it has a run schedule, `service`
+otherwise), container state, version, and when it was last started:
+
+```
+┌─────────┬────────────┬─────────┬─────────┬─────────┬───────────────────────────────────┐
+│ Profile │ Name       │ Type    │ Status  │ Version │ Started                           │
+├─────────┼────────────┼─────────┼─────────┼─────────┼───────────────────────────────────┤
+│         │ backup     │ job     │ JOB     │ 1.4.0   │ 2026-08-26 10:15 -05:00 (23m ago) │
+│         │ report     │ job     │ JOB     │ -       │ never (*)                         │
+│         │ api        │ service │ UP (4d) │ 2.1.0   │ 2026-08-21 15:58 -05:00           │
+│ build   │ worker     │ service │ DOWN    │ 0.3.1   │ -                                 │
+└─────────┴────────────┴─────────┴─────────┴─────────┴───────────────────────────────────┘
+```
+
+Scheduled runs use `docker compose run --rm`, so a finished job leaves no
+container to inspect. The scheduler therefore records when it last ran or
+restarted each service in `last-runs.json` under its state directory
+(`~/Library/Application Support/composer` on macOS, `$XDG_STATE_HOME/composer`
+or `~/.local/state/composer` elsewhere; override with `COMPOSER_STATE_DIR`).
+`composer status` reads the same file, keyed by the compose file's canonical
+path, so run it on the same host and against the same compose file as the
+scheduler.
+
+Every blank in the table is one of three labeled sentinels:
+
+- `-`: nothing to inspect (no container, and nothing in the compose file to go on)
+- `never (*)`: the scheduler has never run the service. (*) As far back as its
+  record for this compose file goes, that is: composer can't vouch for anything
+  earlier (the record may have been lost, e.g. with a recreated scheduler
+  container)
+- `unknown`: composer can't tell, e.g. no scheduler has run against this compose file on this host
+
 ## Shell aliases
 
 Composer ships canonical shell aliases for common Docker Compose operations.
