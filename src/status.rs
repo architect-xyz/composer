@@ -323,12 +323,12 @@ fn detect_version(
     container: Option<&ContainerStatus>,
 ) -> Option<String> {
     if let Some(v) = container.and_then(|c| c.image_version_label.as_deref()) {
-        return Some(v.to_string());
+        return Some(shorten_hash(v).to_string());
     }
     if let Some(v) = image.and_then(extract_version) {
         return Some(v);
     }
-    let tag = image.and_then(image_tag);
+    let tag = image.and_then(image_tag).map(shorten_hash);
     let image_id = container.and_then(|c| c.image_id.as_deref()).map(short_image_id);
     match (tag, image_id) {
         (Some(tag), Some(id)) => Some(format!("{tag} ({id})")),
@@ -338,10 +338,29 @@ fn detect_version(
     }
 }
 
+/// Length hashes are cut to, as in `docker images`
+const SHORT_HASH_LEN: usize = 12;
+
 /// `sha256:102dbfdde2da60d2...` -> `102dbfdde2da`
 fn short_image_id(id: &str) -> String {
     let hex = id.strip_prefix("sha256:").unwrap_or(id);
-    hex.chars().take(12).collect()
+    hex.chars().take(SHORT_HASH_LEN).collect()
+}
+
+/// Cut a version that is a bare hash (a tag or label set to a full git
+/// commit or content digest) down to [`SHORT_HASH_LEN`] characters, so it
+/// doesn't blow out the table.  Anything else is returned unchanged,
+/// including all-digit strings, which are more likely a timestamp
+/// (`20240101123456`) than a hash.
+fn shorten_hash(version: &str) -> &str {
+    let is_hash = version.len() > SHORT_HASH_LEN
+        && version.bytes().all(|b| b.is_ascii_hexdigit())
+        && version.bytes().any(|b| b.is_ascii_alphabetic());
+    if is_hash {
+        &version[..SHORT_HASH_LEN]
+    } else {
+        version
+    }
 }
 
 pub fn format_status_table(
@@ -608,6 +627,37 @@ mod tests {
             detect_version(Some("app@sha256:abcdef"), Some(&c)),
             Some("102dbfdde2da".to_string())
         );
+    }
+
+    #[test]
+    fn detect_version_truncates_hashes() {
+        let sha256 = "2ebffb2b349d70a4f2135fc5ad97207f894298d20248928099ba41b76828ea72";
+        let sha1 = "9fceb02d0ae598e95dc970b74767f19372d61af8";
+        let c = container(None, Some("sha256:b8f0ae04ec9c60d2b8ec"));
+        assert_eq!(
+            detect_version(Some(&format!("app:{sha256}")), Some(&c)),
+            Some("2ebffb2b349d (b8f0ae04ec9c)".to_string())
+        );
+        assert_eq!(
+            detect_version(Some(&format!("app:{sha1}")), None),
+            Some("9fceb02d0ae5".to_string())
+        );
+        // a hash in the OCI version label is cut down too
+        let c = container(Some(sha1), None);
+        assert_eq!(
+            detect_version(Some("app:latest"), Some(&c)),
+            Some("9fceb02d0ae5".to_string())
+        );
+    }
+
+    #[test]
+    fn shorten_hash_leaves_non_hashes_alone() {
+        assert_eq!(shorten_hash("abc1234"), "abc1234"); // already short
+        assert_eq!(shorten_hash("102dbfdde2da"), "102dbfdde2da");
+        assert_eq!(shorten_hash("20240101123456"), "20240101123456"); // timestamp
+        assert_eq!(shorten_hash("feature-branch-name"), "feature-branch-name");
+        assert_eq!(shorten_hash("sha-9fceb02d0ae598e95dc9"), "sha-9fceb02d0ae598e95dc9");
+        assert_eq!(shorten_hash("v1.2.3-very-long-suffix"), "v1.2.3-very-long-suffix");
     }
 
     #[test]
