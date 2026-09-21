@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.16](https://github.com/architect-xyz/composer/compare/v0.10.15...v0.10.16) (2026-09-21)
+
+
+### Features
+
+* **status:** expect label to render expected-down services dim, not red ([#69](https://github.com/architect-xyz/composer/issues/69)) ([271d06f](https://github.com/architect-xyz/composer/commit/271d06fa3ed83c5571c340cb8a6d96faa549ade9))
+* **status:** labeled sentinels and a last-run record for jobs ([#67](https://github.com/architect-xyz/composer/issues/67)) ([ea1773c](https://github.com/architect-xyz/composer/commit/ea1773ce28aa04fdf481f4faf682aadf69137d19))
+
+
+### Bug Fixes
+
+* **status:** truncate hash-shaped versions to 12 characters ([#73](https://github.com/architect-xyz/composer/issues/73)) ([9f9c4b8](https://github.com/architect-xyz/composer/commit/9f9c4b8d41506f5a7a2a4bbcbf415303c239f629))
+
 ## [0.10.15](https://github.com/architect-xyz/composer/compare/v0.10.14...v0.10.15) (2026-09-15)
 
 
