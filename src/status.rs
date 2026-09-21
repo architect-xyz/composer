@@ -313,7 +313,7 @@ where
     Tz::Offset: std::fmt::Display,
 {
     match since {
-        Some(_) => format!("afaict {NEVER} since {}", format_time_in(since, tz)),
+        Some(_) => format!("{NEVER} since {}", format_time_in(since, tz)),
         None => NEVER.to_string(),
     }
 }
@@ -751,17 +751,14 @@ mod tests {
     #[test]
     fn never_cell_says_how_far_back_the_record_goes() {
         let since = parse_docker_time("2026-08-21T20:58:12Z");
-        assert_eq!(
-            never_cell_in(since, &Utc),
-            "afaict never since 2026-08-21 20:58 +00:00"
-        );
+        assert_eq!(never_cell_in(since, &Utc), "never since 2026-08-21 20:58 +00:00");
         assert_eq!(never_cell_in(None, &Utc), "never");
         let cell = started_cell(
             &service("job", None, RunHistory::Never(since)),
             None,
             Utc::now(),
         );
-        assert!(cell.starts_with("afaict never since 2026-08-2"), "{cell}");
+        assert!(cell.starts_with("never since 2026-08-2"), "{cell}");
         // still not applicable to a plain service
         assert_eq!(
             started_cell(
