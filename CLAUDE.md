@@ -24,7 +24,7 @@ Composer is a Docker Compose scheduler written in Rust that runs or restarts ser
 ### Key Concepts
 
 - Services are scheduled using labels: `co.architect.composer.run` or `co.architect.composer.restart`
-- Cron expressions are Quartz-compatible (6 fields with seconds first); a strict subset of 5-field crontab expressions is also accepted and normalized to seconds=0 via `scheduler::parse_schedule`, with `*` or named weekdays and a non-`*` weekday requiring day-of-month to start with `*` (see README for supported syntax)
+- Cron expressions use the `cron` crate's Quartz dialect (6 fields with seconds first); five-field expressions omit seconds, defaulting to 0 via `scheduler::parse_schedule`. Both forms use 1=Sunday through 7=Saturday and AND semantics for day-of-month/day-of-week, not Unix crontab semantics.
 - The scheduler runs as a Docker service itself, mounting the Docker socket
 - Logs can be captured to files or output to console for debugging
 

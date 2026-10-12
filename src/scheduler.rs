@@ -1,5 +1,5 @@
 use crate::compose::ComposeContext;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
@@ -8,112 +8,42 @@ use regex::Regex;
 use serde_json::json;
 use std::{process::Stdio, sync::LazyLock};
 
-/// Parse a cron expression.  The `cron` crate wants the Quartz form, with a
-/// seconds field first (6 fields, or 7 with a trailing year).  The classic
-/// crontab form has 5 fields (`minute hour day-of-month month day-of-week`).
-/// Try the crate first so every expression it accepts keeps its meaning,
-/// including shorthands and spellings whose whitespace tokens are not fields.
-/// Otherwise, [`crontab_to_quartz`] recognises a strict crontab subset and
-/// rewrites it to fire at second 0.
+/// Parse the `cron` crate's Quartz dialect, optionally omitting seconds.
+/// Native expressions are tried first to preserve their meaning. Otherwise,
+/// five complete fields are parsed with a leading `0` seconds field; their
+/// syntax and semantics are still those of the crate, not Unix crontab.
 pub fn parse_schedule(expr: &str) -> Result<Schedule> {
     let expr = expr.trim();
     expr.parse::<Schedule>()
         .map_err(anyhow::Error::from)
         .or_else(|original_error| {
-            let tokens: Vec<&str> = expr.split_whitespace().collect();
-            match <[&str; 5]>::try_from(tokens) {
-                Ok(fields) => {
-                    crontab_to_quartz(&fields)?.parse().map_err(anyhow::Error::from)
-                }
-                Err(_) => Err(original_error),
+            let fields: Vec<&str> = expr.split_whitespace().collect();
+            if fields.len() != 5 || !fields.iter().all(|f| QUARTZ_FIELD.is_match(f)) {
+                return Err(original_error);
             }
+            format!("0 {}", fields.join(" ")).parse().map_err(anyhow::Error::from)
         })
         .with_context(|| format!("while parsing cron expression: {expr}"))
 }
 
-/// One crontab field: `item(/step)?(,item(/step)?)*` where an item is `*`,
-/// a number, a numeric range, a name, or a name range. No whitespace, no
-/// Quartz-only syntax (`?`, `L`, `W`, `#`).
-static CRONTAB_FIELD: LazyLock<Regex> = LazyLock::new(|| {
+/// Recognise complete, whitespace-free fields, not just whitespace tokens.
+/// In `cron` 0.12.1, digit/name runs are consumed whole. Lists, ranges and
+/// steps consume `,`, `-` and `/` with their operands (including wildcards),
+/// or backtrack and leave an operator that cannot start another field.
+/// Since tokens neither start nor end with these operators, they cannot
+/// split into fields or merge across whitespace. The crate still validates
+/// values and where syntax such as `?` is allowed. Review these assumptions
+/// on crate upgrades; the field-set properties are regression checks, not
+/// a proof against every possible grammar change.
+static QUARTZ_FIELD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?x)^
-        (?:\*|[0-9]+(?:-[0-9]+)?|[A-Za-z]+(?:-[A-Za-z]+)?)(?:/[0-9]+)?
-        (?:,(?:\*|[0-9]+(?:-[0-9]+)?|[A-Za-z]+(?:-[A-Za-z]+)?)(?:/[0-9]+)?)*
+        (?:[*?]|[0-9]+(?:-[0-9]+)?|[A-Za-z]+(?:-[A-Za-z]+)?)(?:/[0-9]+)?
+        (?:,(?:[*?]|[0-9]+(?:-[0-9]+)?|[A-Za-z]+(?:-[A-Za-z]+)?)(?:/[0-9]+)?)*
         $",
     )
-    .expect("CRONTAB_FIELD regex is valid")
+    .expect("QUARTZ_FIELD regex is valid")
 });
-
-/// The crontab day-of-week field, restricted to `*` or named days
-/// (`MON`, `MON-FRI/2`, `SAT,SUN`). Steps are allowed on named ranges.
-/// Numeric weekdays and wildcard steps are refused: crontab counts
-/// 0 (or 7) = Sunday, 1 = Monday, while the `cron` crate counts
-/// 1 = Sunday, so a numeric day would silently shift by one.
-static CRONTAB_DAY_OF_WEEK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?x)^(?:\*|
-        [A-Za-z]+(?:-[A-Za-z]+(?:/[0-9]+)?)?
-        (?:,[A-Za-z]+(?:-[A-Za-z]+(?:/[0-9]+)?)?)*
-        )$",
-    )
-    .expect("CRONTAB_DAY_OF_WEEK regex is valid")
-});
-
-/// Rewrite a strict 5-field crontab expression as the 6-field Quartz form
-/// the `cron` crate parses, by prepending a `0` seconds field.
-///
-/// # Field boundaries
-///
-/// Legacy expressions are preserved by the raw-first parse in
-/// [`parse_schedule`], not by assumptions about the crate's grammar.
-/// For `cron` 0.12.1 (`src/parsing.rs`), a successful parse of the rewrite
-/// reads exactly `0 minute hour day-of-month month day-of-week`:
-///
-/// - ASCII digit/name runs are consumed whole, or fail validation; they
-///   cannot be shortened into multiple fields. A `*` is one whole item.
-/// - Within a token, `,`, `-` and `/` are consumed with the item/operand
-///   that follows them, including `*` in a list. Alternatives and lists
-///   can backtrack, but a successful prefix then leaves an operator that
-///   cannot begin another field. Such an incomplete token is rejected.
-/// - Tokens contain no whitespace and neither begin nor end with an
-///   operator. Although the crate accepts spaces on either side of an
-///   operator (e.g. `1- 2`), neither side of a strict-token boundary has
-///   one, so a field cannot consume part of the next token.
-///
-/// Values and names are still validated by the crate. Numeric weekdays
-/// are refused because their numbering differs. A non-`*` weekday requires
-/// DOM to start with `*`, preserving Vixie/Cronie's AND semantics; otherwise
-/// crontab uses OR while the crate uses AND.
-///
-/// Tests compare generated valid expressions with independent field sets
-/// and exercise lexical boundaries. They are regression checks, not a
-/// proof against every future grammar change; review this argument and
-/// the dependency parser when upgrading `cron`.
-fn crontab_to_quartz(fields: &[&str; 5]) -> Result<String> {
-    const NAMES: [&str; 5] = ["minute", "hour", "day-of-month", "month", "day-of-week"];
-    for (name, field) in NAMES.iter().zip(fields).take(4) {
-        if !CRONTAB_FIELD.is_match(field) {
-            bail!("{name} field {field:?} is not a valid crontab field");
-        }
-    }
-    let day_of_week = fields[4];
-    if !CRONTAB_DAY_OF_WEEK.is_match(day_of_week) {
-        bail!(
-            "day-of-week field {day_of_week:?}: 5-field expressions must name days \
-             (e.g. MON-FRI, MON-FRI/2 or SAT,SUN), or use '*', because crontab (0 = Sunday) and Quartz \
-             (1 = Sunday) number them differently; or write the 6-field form"
-        );
-    }
-    if !fields[2].starts_with('*') && day_of_week != "*" {
-        bail!(
-            "day-of-month ({:?}) must start with '*' when day-of-week ({day_of_week:?}) is set: \
-             Vixie/Cronie crontab otherwise fires when either matches but composer fires only when both do; \
-             separate schedule labels can run twice when both match",
-            fields[2]
-        );
-    }
-    Ok(format!("0 {}", fields.join(" ")))
-}
 
 pub async fn run_command_on_schedule(
     context: ComposeContext,
@@ -306,42 +236,51 @@ mod tests {
     }
 
     #[test]
-    fn five_field_rejects_numeric_day_of_week() {
-        for dow in ["1", "0", "7", "1-5", "*/2", "MON,1", "MON/2", "*,MON"] {
-            let expr = format!("0 2 * * {dow}");
-            let err = format!("{:?}", parse_schedule(&expr).unwrap_err());
-            assert!(err.contains("must name days"), "{expr}: {err}");
+    fn five_field_uses_quartz_weekdays() {
+        for (dow, expected) in [
+            ("1", vec![1]),
+            ("7", vec![7]),
+            ("1-5", vec![1, 2, 3, 4, 5]),
+            ("*/2", vec![1, 3, 5, 7]),
+            ("MON,1", vec![1, 2]),
+            ("*,MON", vec![1, 2, 3, 4, 5, 6, 7]),
+        ] {
+            let schedule = parse_schedule(&format!("0 2 * * {dow}")).unwrap();
+            assert_eq!(schedule.days_of_week().iter().collect::<Vec<_>>(), expected);
         }
-        assert!(parse_schedule("0 2 * * MON").is_ok());
-        assert!(parse_schedule("0 2 * * mon-fri").is_ok());
-        assert!(parse_schedule("0 2 * * SAT,SUN").is_ok());
-        // 6-field numeric days are the crate's business, unchanged
-        assert!(parse_schedule("0 0 2 * * 1").is_ok());
+        assert_eq!(upcoming("0 2 * * 1"), upcoming("0 2 * * SUN"));
+        assert_eq!(upcoming("0 2 * * 7"), upcoming("0 2 * * SAT"));
     }
 
     #[test]
-    fn five_field_rejects_or_day_semantics() {
-        for dom in ["1", "1-31", "1,*"] {
-            let expr = format!("0 0 {dom} * MON");
-            let err = format!("{:?}", parse_schedule(&expr).unwrap_err());
-            assert!(err.contains("either matches"), "{expr}: {err}");
-            assert!(err.contains("run twice"), "{expr}: {err}");
-        }
-        assert!(parse_schedule("0 0 1 * *").is_ok());
-        assert!(parse_schedule("0 0 * * MON").is_ok());
-        // the crate accepts the 6-field form; its and-semantics are then explicit
-        assert!(parse_schedule("0 0 0 1 * MON").is_ok());
-    }
-
-    #[test]
-    fn five_field_wildcard_dom_keeps_and_semantics() {
-        for dom in ["*", "*/1", "*,1"] {
+    fn five_field_day_constraints_use_and() {
+        assert_eq!(
+            upcoming("0 2 1 * MON"),
+            vec!["2026-06-01 02:00:00", "2027-02-01 02:00:00", "2027-03-01 02:00:00"]
+        );
+        for dom in ["*", "*/1", "*,1", "1,*", "1-31"] {
             assert_eq!(upcoming(&format!("0 0 {dom} * MON")), upcoming("0 0 * * MON"));
         }
         assert_eq!(
             upcoming("0 0 */2 * MON"),
             vec!["2026-03-09 00:00:00", "2026-03-23 00:00:00", "2026-04-13 00:00:00"]
         );
+    }
+
+    #[test]
+    fn five_field_question_mark_is_a_day_wildcard() {
+        let schedule = parse_schedule("0 2 ? * MON").unwrap();
+        assert!(schedule.days_of_month().is_all());
+        assert_eq!(schedule.days_of_week().iter().collect::<Vec<_>>(), vec![2]);
+        let schedule = parse_schedule("0 2 1 * ?").unwrap();
+        assert_eq!(schedule.days_of_month().iter().collect::<Vec<_>>(), vec![1]);
+        assert!(schedule.days_of_week().is_all());
+        let schedule = parse_schedule("0 2 ?/2 * ?/2").unwrap();
+        assert_eq!(
+            schedule.days_of_month().iter().collect::<Vec<_>>(),
+            (1..=31).step_by(2).collect::<Vec<_>>()
+        );
+        assert_eq!(schedule.days_of_week().iter().collect::<Vec<_>>(), vec![1, 3, 5, 7]);
     }
 
     #[test]
@@ -361,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn five_field_numeric_point_step_extension() {
+    fn five_field_numeric_point_steps() {
         let schedule = parse_schedule("5/10,30 2 * * *").unwrap();
         assert_eq!(
             schedule.minutes().iter().collect::<Vec<_>>(),
@@ -386,9 +325,16 @@ mod tests {
             assert!(ours.timeunitspec_eq(&crates), "{expr}");
             assert_eq!(ours.to_string(), expr);
         }
-        // Quartz-only syntax isn't crontab, so it isn't rewritten either
-        let err = format!("{:?}", parse_schedule("0 2 ? * MON").unwrap_err());
-        assert!(err.contains("not a valid crontab field"), "{err}");
+    }
+
+    #[test]
+    fn five_field_requires_complete_fields() {
+        for expr in ["0 0 31 * *2027", "0 0 31 * **"] {
+            assert!(expr.parse::<Schedule>().is_err());
+            // A token-count-only fallback would accidentally accept seven fields.
+            assert!(format!("0 {expr}").parse::<Schedule>().is_ok());
+            assert!(parse_schedule(expr).is_err());
+        }
     }
 
     #[test]
@@ -424,14 +370,17 @@ mod tests {
             "1,*",
             "1,*/2",
             "1,JAN",
+            "?",
+            "?/2",
+            "?,MON",
             "JAN/2",
             "JAN-FEB/2",
             "January",
             "L",
             "W",
         ] {
-            assert!(CRONTAB_FIELD.is_match(token), "{token}");
-            for position in 0..4 {
+            assert!(QUARTZ_FIELD.is_match(token), "{token}");
+            for position in 0..5 {
                 let mut fields = ["0", "0", "*", "*", "*"];
                 fields[position] = token;
                 let expr = fields.join(" ");
@@ -479,13 +428,18 @@ mod tests {
             "JAN/2 * * * *",
             "0 0 * * MON-FRI/0",
             "0 0 * * MON-FRI/4294967296",
+            "0 2 * * 0",
+            "0 2 * * MON/2",
+            "? 2 * * *",
+            "0 ? * * *",
+            "0 2 * ? *",
         ] {
             let err = parse_schedule(bad).unwrap_err().to_string();
             assert!(err.contains("while parsing cron expression"), "{bad}: {err}");
         }
     }
 
-    mod crontab_properties {
+    mod five_field_properties {
         //! Generate valid spellings with independently calculated field sets.
         //! No parser is used to build the expectations, and parse failures are
         //! failures, not skipped cases. Sampling supplements the boundary
@@ -493,11 +447,15 @@ mod tests {
         use super::*;
         use proptest::prelude::*;
 
-        fn numeric_item(min: u32, max: u32) -> impl Strategy<Value = (String, Vec<u32>)> {
+        fn numeric_item(
+            min: u32,
+            max: u32,
+            wildcard: &'static str,
+        ) -> impl Strategy<Value = (String, Vec<u32>)> {
             (min..=max, min..=max, 0..3, prop::option::of(1..=max + 1), 0..=4usize)
                 .prop_map(move |(a, b, kind, step, width)| {
                     let (mut text, start, end) = match kind {
-                        0 => ("*".to_string(), min, max),
+                        0 => (wildcard.to_string(), min, max),
                         1 => (
                             format!("{a:0width$}"),
                             a,
@@ -591,31 +549,18 @@ mod tests {
                 "Friday",
                 "Saturday",
             ];
-            let days = prop_oneof![
-                field(numeric_item(1, 31))
-                    .prop_map(|dom| (dom, ("*".to_string(), (1..=7).collect()))),
-                (prop::option::of(1..=32u32), field(named_item(DAYS))).prop_map(
-                    |(step, dow)| {
-                        let text = step
-                            .map(|step| format!("*/{step}"))
-                            .unwrap_or_else(|| "*".to_string());
-                        (
-                            (
-                                text,
-                                (1..=31).step_by(step.unwrap_or(1) as usize).collect(),
-                            ),
-                            dow,
-                        )
-                    }
-                ),
-            ];
             (
-                field(numeric_item(0, 59)),
-                field(numeric_item(0, 23)),
-                days,
-                field(prop_oneof![numeric_item(1, 12), named_item(MONTHS)]),
+                field(numeric_item(0, 59, "*")),
+                field(numeric_item(0, 23, "*")),
+                field(prop_oneof![numeric_item(1, 31, "*"), numeric_item(1, 31, "?")]),
+                field(prop_oneof![numeric_item(1, 12, "*"), named_item(MONTHS)]),
+                field(prop_oneof![
+                    numeric_item(1, 7, "*"),
+                    numeric_item(1, 7, "?"),
+                    named_item(DAYS)
+                ]),
             )
-                .prop_map(|(minute, hour, (dom, dow), month)| {
+                .prop_map(|(minute, hour, dom, month, dow)| {
                     [minute, hour, dom, month, dow]
                 })
         }
@@ -624,8 +569,8 @@ mod tests {
             #[test]
             fn valid_fields_are_read_positionally(fields in fields()) {
                 let tokens = fields.each_ref().map(|(text, _)| text.as_str());
-                let quartz = crontab_to_quartz(&tokens).unwrap();
-                let schedule: Schedule = quartz.parse().unwrap();
+                let expr = tokens.join(" ");
+                let schedule = parse_schedule(&expr).unwrap();
                 prop_assert_eq!(schedule.seconds().iter().collect::<Vec<_>>(), vec![0]);
                 prop_assert!(schedule.years().is_all());
                 let actual = [
@@ -636,10 +581,8 @@ mod tests {
                     schedule.days_of_week().iter().collect::<Vec<_>>(),
                 ];
                 for ((text, expected), actual) in fields.iter().zip(actual) {
-                    prop_assert_eq!(&actual, expected, "field {:?} in {:?}", text, quartz);
+                    prop_assert_eq!(&actual, expected, "field {:?} in {:?}", text, expr);
                 }
-                let parsed = parse_schedule(&tokens.join(" ")).unwrap();
-                prop_assert!(parsed.timeunitspec_eq(&schedule));
             }
 
             #[test]

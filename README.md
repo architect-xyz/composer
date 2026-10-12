@@ -132,37 +132,28 @@ services:
       - "co.architect.composer.restart=0 0 6 * * *"
 ```
 
-Cron expressions are Quartz-compatible (6 fields, seconds first):
+Cron expressions use the Quartz dialect supported by the Rust `cron` crate
+(6 fields, seconds first):
 `seconds minutes hours day-of-month month day-of-week`
 
-Composer also accepts a subset of 5-field crontab expressions (`minutes hours
-day-of-month month day-of-week`). They run at second 0, so `0 2 * * *` and
-`0 0 2 * * *` are equivalent.
+Seconds may be omitted, giving five fields:
+`minutes hours day-of-month month day-of-week`
 
-Fields must not contain internal whitespace. Minutes, hours, day-of-month
-and month accept `*`, points, non-wrapping ranges and comma-separated lists.
-Wildcards and ranges can have steps on individual list items. Months may use
-numbers or names (`1-3` or `JAN-MAR`).
-Weekdays accept `*` or named points, ranges and lists, with steps allowed
-only on named ranges.
+This is **the same Quartz dialect with seconds defaulting to 0**, not Unix
+crontab compatibility. Composer prepends `0`, so `0 2 * * *` and
+`0 0 2 * * *` are equivalent. The five fields must be separated by whitespace,
+with no whitespace inside a field. Values, names, ranges, lists and steps
+are interpreted by the crate, unchanged.
 
-For example, `0-20/10,45 2 * * *` runs at 02:00, 02:10, 02:20 and 02:45;
-`0 2 * * MON-FRI/2` runs at 02:00 on Monday, Wednesday and Friday.
+- Weekdays are numbered **1 = Sunday through 7 = Saturday**, not crontab's
+  0/7 = Sunday. `0 2 * * 1` runs on Sundays at 02:00.
+- Day-of-month and day-of-week use **AND**, not crontab's conditional OR.
+  `0 2 1 * MON` runs at 02:00 only when the first of the month is Monday.
+- `?` is a wildcard in either day field. `0 2 ? * MON` runs every Monday
+  at 02:00.
 
-Beyond that crontab subset, Composer accepts full names such as `January` and
-`Monday`, and numeric point steps: `5/10` selects 5, 15, 25, etc., up to the
-field's maximum. These are extensions to Vixie/Cronie syntax.
-
-Additional 5-field restrictions:
-
-- **Numeric weekdays and wildcard weekday steps (`*/2`) are rejected.**
-  Weekday numbering and step semantics differ between crontab and Quartz.
-  Use names instead.
-- **A weekday other than `*` requires day-of-month to start with `*`.**
-  Otherwise, Vixie/Cronie crontab uses OR, but Composer uses AND.
-  Wildcard-prefix day-of-month forms such as `*/2` are compatible:
-  `0 2 */2 * MON` uses AND in both, running only on Mondays whose
-  day-of-month also matches `*/2`.
+Existing six-/seven-field expressions and supported shorthands such as
+`@daily` retain their meaning; the crate's native parse is always tried first.
 
 ### Multiple schedules
 
@@ -183,9 +174,8 @@ services:
       - "co.architect.composer.restart.weekend=0 0 9 * * SAT,SUN"
 ```
 
-Each label is scheduled independently. Overlapping labels trigger duplicate
-executions, so splitting day-of-month and day-of-week into two labels is not
-equivalent to crontab's OR rule, which runs only once when both match.
+Each label is scheduled independently. Overlapping labels can execute the
+same job more than once at a matching time.
 
 ### Timezone support
 
